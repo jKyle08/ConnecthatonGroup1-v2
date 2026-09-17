@@ -46,6 +46,19 @@ npm start   # run server
 npm run dev # run with --watch
 ```
 
+## Deploying to Netlify
+
+The repository is configured for one-click deployment on Netlify with Serverless Functions:
+
+1. **Connect GitHub repository** in Netlify dashboard.
+2. Netlify will auto-detect `netlify.toml`.
+3. In **Site Configuration > Environment Variables**, optionally configure:
+   - `FHIR_BASE_URL` (default: `https://cdr.pheref.fhirlab.net/fhir`)
+   - `TX_BASE_URL` (default: `https://tx.fhirlab.net/fhir`)
+   - `TEAM_PREFIX` (e.g. `TEAM07`)
+   - `DEFAULT_FACILITY_FHIR_ID`, `DEFAULT_FACILITY_NAME`, etc.
+4. Click **Deploy**. The static UI is served at `/` and API routes are served via Netlify Functions at `/api/*`.
+
 ## Notes for teammates
 
 - Generate Referral loads **Referral Priority** from `/api/psgc/referral-categories` (DOH `referral-category` ValueSet).

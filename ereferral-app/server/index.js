@@ -154,13 +154,17 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
-server.listen(PORT, () => {
-  console.log(`eReferral app running at http://localhost:${PORT}`);
-  console.log(`Realtime hub: ws://localhost:${PORT}/socket.io`);
-  if (USE_PERSISTENT_LOCAL_DB) {
-    console.log(`Local DB (SQLite): ${dbPath}`);
-  } else {
-    console.log('Local DB: disabled (in-memory scratch only; FHIR is source of truth)');
-  }
-  console.log(`FHIR base: ${FHIR_BASE_URL}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`eReferral app running at http://localhost:${PORT}`);
+    console.log(`Realtime hub: ws://localhost:${PORT}/socket.io`);
+    if (USE_PERSISTENT_LOCAL_DB) {
+      console.log(`Local DB (SQLite): ${dbPath}`);
+    } else {
+      console.log('Local DB: disabled (in-memory scratch only; FHIR is source of truth)');
+    }
+    console.log(`FHIR base: ${FHIR_BASE_URL}`);
+  });
+}
+
+module.exports = { app, server };
