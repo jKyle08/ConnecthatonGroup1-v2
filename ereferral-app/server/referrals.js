@@ -531,6 +531,7 @@ async function resolvePractitionerRef({
   pracFhirId,
   label,
   organizationFhirId,
+  optional = false,
 }) {
   if (pracId) {
     const local = db.prepare('SELECT * FROM Practitioners WHERE Id = ?').get(Number(pracId));
@@ -555,6 +556,7 @@ async function resolvePractitionerRef({
     }
     const mapped = pracFromRoleApi(role, practitioner);
     if (!mapped?.FhirId && !mapped?.RoleFhirId) {
+      if (optional) return null;
       throw new Error(`${label} practitioner role not found on FHIR (id ${roleId}).`);
     }
     if (organizationFhirId) mapped.OrganizationFhirId = organizationFhirId;
@@ -568,12 +570,14 @@ async function resolvePractitionerRef({
     const practitioner = await getPractitioner(fhirId);
     const mapped = pracFromRoleApi(null, practitioner);
     if (!mapped?.FhirId) {
+      if (optional) return null;
       throw new Error(`${label} practitioner not found on FHIR (id ${fhirId}).`);
     }
     if (organizationFhirId) mapped.OrganizationFhirId = organizationFhirId;
     return mapped;
   }
 
+  if (optional) return null;
   throw new Error(`${label} practitioner is required.`);
 }
 
@@ -1082,28 +1086,28 @@ async function partiesForStoredReferral(row) {
     pracFhirId: row.SendingPracFhirId,
     label: 'Sending',
     organizationFhirId: sendingOrg.FhirId,
+    optional: true,
   });
   const receivingPrac = await resolvePractitionerRef({
     pracId: row.ReceivingPracId,
     pracFhirId: row.ReceivingPracFhirId,
     label: 'Receiving',
     organizationFhirId: receivingOrg.FhirId,
+    optional: true,
   });
 
   patient = await ensurePatientSynced(patient);
-  const syncedSendingPrac = await ensurePractitionerSynced(sendingPrac, sendingOrg.FhirId);
-  const syncedReceivingPrac = await ensurePractitionerSynced(receivingPrac, receivingOrg.FhirId);
+  const syncedSendingPrac = sendingPrac
+    ? await ensurePractitionerSynced(sendingPrac, sendingOrg.FhirId)
+    : null;
+  const syncedReceivingPrac = receivingPrac
+    ? await ensurePractitionerSynced(receivingPrac, receivingOrg.FhirId)
+    : null;
 
-  if (
-    !patient.FhirId ||
-    !sendingOrg.FhirId ||
-    !receivingOrg.FhirId ||
-    !syncedSendingPrac.FhirId ||
-    !syncedReceivingPrac.FhirId
-  ) {
+  if (!patient.FhirId || !sendingOrg.FhirId || !receivingOrg.FhirId) {
     throw Object.assign(
       new Error(
-        'Could not sync all referenced records to FHIR. Ensure patient, facilities, and practitioners sync successfully first.'
+        'Could not sync patient/facilities to FHIR. Ensure those records sync successfully first.'
       ),
       { status: 502 }
     );
@@ -1153,8 +1157,8 @@ function buildBundleFromReferralRow(row, parties) {
       labConclusion: row.LabConclusion,
       referralNote: row.ReferralNote,
       taskNote: row.TaskNote,
-      practitionerRoleCode: sendingPrac.RoleCode || DEFAULT_ROLE_CODE,
-      practitionerRoleDisplay: sendingPrac.RoleDisplay || DEFAULT_ROLE_DISPLAY,
+      practitionerRoleCode: sendingPrac?.RoleCode || DEFAULT_ROLE_CODE,
+      practitionerRoleDisplay: sendingPrac?.RoleDisplay || DEFAULT_ROLE_DISPLAY,
     },
   });
 }
@@ -1296,12 +1300,6 @@ router.post('/', async (req, res) => {
   if (!(b.patientId || b.patientFhirId)) {
     return res.status(400).json({ error: 'Missing fields: patientId or patientFhirId' });
   }
-  if (!(b.sendingPracId || b.sendingPracRoleFhirId || b.sendingPracFhirId)) {
-    return res.status(400).json({ error: 'Missing fields: sending practitioner role' });
-  }
-  if (!(b.receivingPracId || b.receivingPracRoleFhirId || b.receivingPracFhirId)) {
-    return res.status(400).json({ error: 'Missing fields: receiving practitioner role' });
-  }
 
   const hasSendingOrg = b.sendingOrgId || b.sendingOrgFhirId;
   const hasReceivingOrg = b.receivingOrgId || b.receivingOrgFhirId;
@@ -1346,6 +1344,7 @@ router.post('/', async (req, res) => {
       pracFhirId: b.sendingPracFhirId,
       label: 'Sending',
       organizationFhirId: sendingOrg.FhirId,
+      optional: true,
     });
     let receivingPrac = await resolvePractitionerRef({
       pracId: b.receivingPracId,
@@ -1353,22 +1352,21 @@ router.post('/', async (req, res) => {
       pracFhirId: b.receivingPracFhirId,
       label: 'Receiving',
       organizationFhirId: receivingOrg.FhirId,
+      optional: true,
     });
 
     patient = await ensurePatientSynced(patient);
-    sendingPrac = await ensurePractitionerSynced(sendingPrac, sendingOrg.FhirId);
-    receivingPrac = await ensurePractitionerSynced(receivingPrac, receivingOrg.FhirId);
+    if (sendingPrac) {
+      sendingPrac = await ensurePractitionerSynced(sendingPrac, sendingOrg.FhirId);
+    }
+    if (receivingPrac) {
+      receivingPrac = await ensurePractitionerSynced(receivingPrac, receivingOrg.FhirId);
+    }
 
-    if (
-      !patient.FhirId ||
-      !sendingOrg.FhirId ||
-      !receivingOrg.FhirId ||
-      !sendingPrac.FhirId ||
-      !receivingPrac.FhirId
-    ) {
+    if (!patient.FhirId || !sendingOrg.FhirId || !receivingOrg.FhirId) {
       return res.status(502).json({
         error:
-          'Could not sync all referenced records to FHIR. Ensure patient, facilities, and practitioners sync successfully first.',
+          'Could not sync patient/facilities to FHIR. Ensure those records sync successfully first.',
       });
     }
 
@@ -1429,11 +1427,11 @@ router.post('/', async (req, res) => {
       ReceivingOrgId: receivingOrg.Id || null,
       ReceivingOrgFhirId: receivingOrg.FhirId,
       ReceivingOrgName: receivingOrg.Name,
-      SendingPracId: sendingPrac.Id || null,
-      SendingPracFhirId: sendingPrac.FhirId,
+      SendingPracId: sendingPrac?.Id || null,
+      SendingPracFhirId: sendingPrac?.FhirId || null,
       SendingPracName: sendingPracName,
-      ReceivingPracId: receivingPrac.Id || null,
-      ReceivingPracFhirId: receivingPrac.FhirId,
+      ReceivingPracId: receivingPrac?.Id || null,
+      ReceivingPracFhirId: receivingPrac?.FhirId || null,
       ReceivingPracName: receivingPracName,
       CategoryCode: category.code,
       CategoryDisplay: category.display,
@@ -1502,8 +1500,8 @@ router.post('/', async (req, res) => {
         labConclusion: row.LabConclusion,
         referralNote: row.ReferralNote,
         taskNote: row.TaskNote,
-        practitionerRoleCode: sendingPrac.RoleCode || DEFAULT_ROLE_CODE,
-        practitionerRoleDisplay: sendingPrac.RoleDisplay || DEFAULT_ROLE_DISPLAY,
+        practitionerRoleCode: sendingPrac?.RoleCode || DEFAULT_ROLE_CODE,
+        practitionerRoleDisplay: sendingPrac?.RoleDisplay || DEFAULT_ROLE_DISPLAY,
       },
     });
 

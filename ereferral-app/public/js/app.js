@@ -5389,12 +5389,6 @@ function validateReferralForm(form) {
     });
     return false;
   }
-  if (!form.sendingPracRoleFhirId?.value || !form.receivingPracRoleFhirId?.value) {
-    showToast('Select sending and receiving practitioner roles from FHIR.', 'err', {
-      title: 'Validation',
-    });
-    return false;
-  }
   if (!form.workingImpressionCode?.value || !form.workingImpression?.value) {
     showToast('Select a Working Impression (Diagnosis) from the SNOMED search.', 'err', {
       title: 'Validation',

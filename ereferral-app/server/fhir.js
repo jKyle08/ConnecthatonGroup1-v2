@@ -1238,6 +1238,10 @@ function matchesPractitionerRoleQuery(role, q) {
 
 function buildPractitionerRoleResource(p) {
   const prcId = p.PrcId || p.prcId;
+  const identifierSystem =
+    p.IdentifierSystem || p.identifierSystem || (prcId ? PRC_SYSTEM : null);
+  const identifierValue =
+    p.IdentifierValue || p.identifierValue || prcId || null;
   const roleCode = p.RoleCode || p.roleCode || DEFAULT_ROLE_CODE;
   const roleDisplay = p.RoleDisplay || p.roleDisplay || DEFAULT_ROLE_DISPLAY;
   const roleSystem = p.RoleSystem || p.roleSystem || SNOMED_SYSTEM;
@@ -1254,14 +1258,15 @@ function buildPractitionerRoleResource(p) {
     meta: { profile: [PRACTITIONER_ROLE_PROFILE] },
     language: 'en',
     active,
-    identifier: prcId
-      ? [
-          {
-            system: PRC_SYSTEM,
-            value: prcId,
-          },
-        ]
-      : undefined,
+    identifier:
+      identifierSystem && identifierValue
+        ? [
+            {
+              system: identifierSystem,
+              value: String(identifierValue),
+            },
+          ]
+        : undefined,
     code: [
       {
         coding: [
@@ -1276,10 +1281,18 @@ function buildPractitionerRoleResource(p) {
     ],
   };
 
-  if (practitionerFhirId) {
-    resource.practitioner = { reference: `Practitioner/${practitionerFhirId}` };
+  if (practitionerFhirId || p.PractitionerReference || p.practitionerReference) {
+    const practitionerReference =
+      p.PractitionerReference || p.practitionerReference || null;
+    resource.practitioner = practitionerReference
+      ? { reference: practitionerReference }
+      : { reference: `Practitioner/${practitionerFhirId}` };
   }
-  if (organizationFhirId) {
+  const organizationReference =
+    p.OrganizationReference || p.organizationReference || null;
+  if (organizationReference) {
+    resource.organization = { reference: organizationReference };
+  } else if (organizationFhirId) {
     resource.organization = { reference: `Organization/${organizationFhirId}` };
   }
 
@@ -1651,22 +1664,26 @@ function buildReferralBundle({
   patient,
   sendingOrg,
   receivingOrg,
-  sendingPrac,
-  receivingPrac,
+  sendingPrac = null,
+  receivingPrac = null,
   data = {},
 }) {
   const patientFhirId = patient.FhirId || patient.fhirId;
   const sendingOrgFhirId = sendingOrg.FhirId || sendingOrg.fhirId;
   const receivingOrgFhirId = receivingOrg.FhirId || receivingOrg.fhirId;
-  const sendingPracFhirId = sendingPrac.FhirId || sendingPrac.fhirId;
-  const receivingPracFhirId = receivingPrac.FhirId || receivingPrac.fhirId;
-  const sendingRoleFhirId = sendingPrac.RoleFhirId || sendingPrac.roleFhirId || null;
+  const sendingPrcId = sendingPrac?.PrcId || sendingPrac?.prcId || null;
+  const receivingPrcId = receivingPrac?.PrcId || receivingPrac?.prcId || null;
+  const sendingPracFhirId = sendingPrac?.FhirId || sendingPrac?.fhirId || null;
+  const receivingPracFhirId = receivingPrac?.FhirId || receivingPrac?.fhirId || null;
+  const sendingRoleFhirId = sendingPrac?.RoleFhirId || sendingPrac?.roleFhirId || null;
   const receivingRoleFhirId =
-    receivingPrac.RoleFhirId || receivingPrac.roleFhirId || null;
+    receivingPrac?.RoleFhirId || receivingPrac?.roleFhirId || null;
   const now = data.dateOfReferral || new Date().toISOString();
   const effective = data.observationsEffectiveDateTime || now;
   const requisition = data.requisitionValue;
 
+  // CDR requires PractitionerRole for requester. Roles optional in UI —
+  // synthesize a facility-linked role when none is selected.
   const sendingRoleUrl = sendingRoleFhirId
     ? `PractitionerRole/${sendingRoleFhirId}`
     : uuidRef('sending-role');
@@ -1680,55 +1697,93 @@ function buildReferralBundle({
   const taskUrl = uuidRef('task');
   const procedureUrl = uuidRef('procedure');
 
-  const roleCode = data.practitionerRoleCode || sendingPrac.RoleCode || DEFAULT_ROLE_CODE;
+  const roleCode =
+    data.practitionerRoleCode || sendingPrac?.RoleCode || DEFAULT_ROLE_CODE;
   const roleDisplay =
-    data.practitionerRoleDisplay || sendingPrac.RoleDisplay || DEFAULT_ROLE_DISPLAY;
+    data.practitionerRoleDisplay ||
+    sendingPrac?.RoleDisplay ||
+    DEFAULT_ROLE_DISPLAY;
 
   const entries = [];
+  const sendingNhfr = sendingOrg.NhfrCode || sendingOrg.nhfrCode;
+  const receivingNhfr = receivingOrg.NhfrCode || receivingOrg.nhfrCode;
+  const facilityRoleId = (nhfr, orgFhirId) =>
+    `${String(nhfr || orgFhirId || 'facility').replace(/\s+/g, '')}-facility-role`;
 
-  // Prefer existing PractitionerRole FHIR ids (team format). Only PUT when missing.
   if (!sendingRoleFhirId) {
-    entries.push({
-      fullUrl: sendingRoleUrl,
-      resource: buildPractitionerRoleResource({
-        PrcId: sendingPrac.PrcId || sendingPrac.prcId,
-        RoleCode: roleCode,
-        RoleDisplay: roleDisplay,
-        FhirId: sendingPracFhirId,
-        OrganizationFhirId: sendingOrgFhirId,
-      }),
-      request: {
-        method: 'PUT',
-        url: `PractitionerRole?identifier=${PRC_SYSTEM}|${
-          sendingPrac.PrcId || sendingPrac.prcId
-        }`,
-      },
-    });
+    if (sendingPrcId && sendingPracFhirId) {
+      entries.push({
+        fullUrl: sendingRoleUrl,
+        resource: buildPractitionerRoleResource({
+          PrcId: sendingPrcId,
+          RoleCode: roleCode,
+          RoleDisplay: roleDisplay,
+          FhirId: sendingPracFhirId,
+          OrganizationFhirId: sendingOrgFhirId,
+        }),
+        request: {
+          method: 'PUT',
+          url: `PractitionerRole?identifier=${encodeURIComponent(PRC_SYSTEM)}|${encodeURIComponent(sendingPrcId)}`,
+        },
+      });
+    } else {
+      const idValue = facilityRoleId(sendingNhfr, sendingOrgFhirId);
+      entries.push({
+        fullUrl: sendingRoleUrl,
+        resource: buildPractitionerRoleResource({
+          IdentifierSystem: NHFR_SYSTEM,
+          IdentifierValue: idValue,
+          RoleCode: roleCode,
+          RoleDisplay: roleDisplay,
+          OrganizationFhirId: sendingOrgFhirId,
+        }),
+        request: {
+          method: 'PUT',
+          url: `PractitionerRole?identifier=${encodeURIComponent(NHFR_SYSTEM)}|${encodeURIComponent(idValue)}`,
+        },
+      });
+    }
   }
 
   if (!receivingRoleFhirId) {
-    entries.push({
-      fullUrl: receivingRoleUrl,
-      resource: buildPractitionerRoleResource({
-        PrcId: receivingPrac.PrcId || receivingPrac.prcId,
-        RoleCode:
-          data.receivingPractitionerRoleCode ||
-          receivingPrac.RoleCode ||
-          roleCode,
-        RoleDisplay:
-          data.receivingPractitionerRoleDisplay ||
-          receivingPrac.RoleDisplay ||
-          roleDisplay,
-        FhirId: receivingPracFhirId,
-        OrganizationFhirId: receivingOrgFhirId,
-      }),
-      request: {
-        method: 'PUT',
-        url: `PractitionerRole?identifier=${PRC_SYSTEM}|${
-          receivingPrac.PrcId || receivingPrac.prcId
-        }`,
-      },
-    });
+    if (receivingPrcId && receivingPracFhirId) {
+      entries.push({
+        fullUrl: receivingRoleUrl,
+        resource: buildPractitionerRoleResource({
+          PrcId: receivingPrcId,
+          RoleCode:
+            data.receivingPractitionerRoleCode ||
+            receivingPrac?.RoleCode ||
+            roleCode,
+          RoleDisplay:
+            data.receivingPractitionerRoleDisplay ||
+            receivingPrac?.RoleDisplay ||
+            roleDisplay,
+          FhirId: receivingPracFhirId,
+          OrganizationFhirId: receivingOrgFhirId,
+        }),
+        request: {
+          method: 'PUT',
+          url: `PractitionerRole?identifier=${encodeURIComponent(PRC_SYSTEM)}|${encodeURIComponent(receivingPrcId)}`,
+        },
+      });
+    } else {
+      const idValue = facilityRoleId(receivingNhfr, receivingOrgFhirId);
+      entries.push({
+        fullUrl: receivingRoleUrl,
+        resource: buildPractitionerRoleResource({
+          IdentifierSystem: NHFR_SYSTEM,
+          IdentifierValue: idValue,
+          RoleCode: data.receivingPractitionerRoleCode || roleCode,
+          RoleDisplay: data.receivingPractitionerRoleDisplay || roleDisplay,
+          OrganizationFhirId: receivingOrgFhirId,
+        }),
+        request: {
+          method: 'PUT',
+          url: `PractitionerRole?identifier=${encodeURIComponent(NHFR_SYSTEM)}|${encodeURIComponent(idValue)}`,
+        },
+      });
+    }
   }
 
   entries.push({
