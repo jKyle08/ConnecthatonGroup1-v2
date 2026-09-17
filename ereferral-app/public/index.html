@@ -19,7 +19,6 @@
         <img class="app-header-logo" src="/img/logo.png?v=transparent-1" alt="eReferral" />
         <div class="app-header-titles">
           <strong class="app-header-title">eReferral</strong>
-          <span class="app-header-sub">DOH Connectathon - Philippine Health Information Exchange</span>
         </div>
       </div>
 
@@ -30,7 +29,7 @@
             FHIR: <strong id="fhirStatus">Checking…</strong>
           </div>
         </div>
-        <div class="user-box">
+        <button type="button" class="user-box facility-switcher-btn" id="facilitySwitcherBtn" title="Click to change active facility" aria-haspopup="dialog">
           <span class="avatar avatar-icon" aria-hidden="true">
             <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
               <circle cx="20" cy="20" r="20" fill="#fff"/>
@@ -40,9 +39,9 @@
           </span>
           <div class="user-meta">
             <strong id="teamLabel">Connectathon Facility</strong>
-            <small class="user-facility-chip" id="teamChip">Connectathon Team</small>
+            <small class="user-facility-chip" id="teamChip">Switch Facility ▾</small>
           </div>
-        </div>
+        </button>
       </div>
     </header>
 
@@ -1244,6 +1243,36 @@
         <button class="btn btn-primary btn-entity-save" type="submit" form="practitionerRoleQuickForm" id="savePractitionerRoleQuickBtn">
           Save Role Assignment
         </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="facilitySwitcherModal" hidden>
+    <div class="modal-backdrop" data-close-modal="facilitySwitcher"></div>
+    <div class="modal-panel entity-quick-modal" role="dialog" aria-modal="true" aria-labelledby="facilitySwitcherTitle">
+      <div class="modal-head entity-quick-head">
+        <div class="modal-identity">
+          <p class="modal-kicker">Facility Management</p>
+          <h2 class="modal-title" id="facilitySwitcherTitle">Switch Active Facility</h2>
+          <p class="modal-subtitle">Choose which health facility or organization you are operating as</p>
+        </div>
+        <button class="modal-close" type="button" data-close-modal="facilitySwitcher" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+      <div class="modal-body entity-quick-body" style="padding-bottom: 0.5rem;">
+        <div class="field-row">
+          <div class="field-group full">
+            <label for="facilitySearchInput">Search Facility</label>
+            <input type="search" id="facilitySearchInput" placeholder="Search by facility name, NHFR code, or address..." autocomplete="off" />
+          </div>
+        </div>
+        <div class="facility-picker-list" id="facilityPickerList">
+          <p class="placeholder" style="padding: 1rem; text-align: center;">Loading facilities…</p>
+        </div>
+      </div>
+      <div class="modal-footer entity-quick-footer">
+        <button type="button" class="btn btn-secondary" data-close-modal="facilitySwitcher">Cancel</button>
       </div>
     </div>
   </div>

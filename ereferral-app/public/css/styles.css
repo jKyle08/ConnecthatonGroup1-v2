@@ -349,6 +349,26 @@ a { color: inherit; text-decoration: none; }
   color: #fff;
 }
 
+.facility-switcher-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.18s ease;
+  text-align: left;
+}
+.facility-switcher-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.45);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.facility-switcher-btn:active {
+  transform: translateY(0);
+}
+
 .user-meta {
   min-width: 0;
   text-align: left;
@@ -375,6 +395,71 @@ a { color: inherit; text-decoration: none; }
   padding: 0.18rem 0.5rem;
   margin-top: 0.2rem;
   white-space: nowrap;
+}
+
+.facility-picker-list {
+  max-height: 380px;
+  overflow-y: auto;
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-right: 0.25rem;
+}
+
+.facility-card-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border-color, #e1e4e8);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+  width: 100%;
+  color: inherit;
+  font-family: inherit;
+}
+.facility-card-item:hover {
+  background: #f6f8fa;
+  border-color: #0b3a6e;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+.facility-card-item.is-active {
+  background: #eef5fc;
+  border-color: #0b3a6e;
+  border-width: 2px;
+}
+.facility-card-item .fac-meta-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 0.2rem;
+}
+.facility-card-item .fac-meta-details {
+  font-size: 0.78rem;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.facility-card-item .fac-badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 4px;
+  background: #e2e8f0;
+  color: #334155;
+}
+.facility-card-item .fac-badge-active {
+  background: #0b3a6e;
+  color: #fff;
 }
 
 .avatar {

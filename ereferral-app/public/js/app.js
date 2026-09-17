@@ -645,8 +645,170 @@ function setLiveStatus(status, label) {
   syncDot($('#liveDot'), status);
 }
 
+function getActiveFacility() {
+  const saved = localStorage.getItem('ereferral_active_facility');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      if (parsed && (parsed.fhirId || parsed.id || parsed.name)) {
+        return parsed;
+      }
+    } catch {}
+  }
+  return state.health?.defaultFacility || null;
+}
+
 function defaultFacilityFhirId() {
-  return String(state.health?.defaultFacility?.fhirId || '').trim();
+  const active = getActiveFacility();
+  return String(active?.fhirId || active?.id || '').trim();
+}
+
+function syncActiveFacilityUi() {
+  const active = getActiveFacility();
+  const facilityName = active?.name || state.health?.defaultFacility?.name || 'Connectathon Facility';
+  if ($('#teamLabel')) {
+    $('#teamLabel').textContent = facilityName;
+  }
+  if ($('#teamChip')) {
+    const code = active?.nhfrCode ? `NHFR: ${active.nhfrCode}` : (state.health?.teamPrefix ? `${state.health.teamPrefix}` : 'Switch Facility');
+    $('#teamChip').textContent = `${code} ▾`;
+  }
+}
+
+function setActiveFacility(facility) {
+  if (!facility) return;
+  const toSave = {
+    fhirId: facility.fhirId || facility.id,
+    id: facility.id || facility.fhirId,
+    name: facility.name || 'Unknown Facility',
+    nhfrCode: facility.nhfrCode || facility.localCode || '',
+    city: facility.city || facility.cityMunicipality || '',
+    province: facility.province || '',
+  };
+  localStorage.setItem('ereferral_active_facility', JSON.stringify(toSave));
+  if (state.health) {
+    state.health.defaultFacility = {
+      ...(state.health.defaultFacility || {}),
+      ...toSave,
+    };
+  }
+  syncActiveFacilityUi();
+  closeFacilitySwitcherModal();
+  if (typeof showToast === 'function') {
+    showToast(`Active facility set to: ${toSave.name}`, 'ok');
+  }
+
+  // Update quick form / main form facility dropdowns if present
+  const quickOrg = $('#practitionerQuickOrgSelect');
+  if (quickOrg) populateFacilityDropdown(quickOrg, defaultFacilityFhirId());
+  const formOrg = $('#practitionerFormOrgSelect');
+  if (formOrg) populateFacilityDropdown(formOrg, defaultFacilityFhirId());
+}
+
+let allFacilitiesCache = [];
+
+async function loadAllFacilitiesForSwitcher() {
+  if (allFacilitiesCache.length) return allFacilitiesCache;
+  try {
+    const res = await fetch('/api/organizations?source=fhir&count=200');
+    const data = await res.json();
+    const orgs = (data.organizations || []).map((o) => ({
+      id: o.id || o.fhirId,
+      fhirId: o.fhirId || o.id,
+      name: o.name || 'Unnamed Facility',
+      nhfrCode: o.nhfrCode || o.localCode || '',
+      city: o.city || o.cityMunicipality || '',
+      province: o.province || '',
+    }));
+    allFacilitiesCache = orgs;
+    return orgs;
+  } catch {
+    return [];
+  }
+}
+
+function renderFacilityPickerList(facilities, query = '') {
+  const container = $('#facilityPickerList');
+  if (!container) return;
+  const currentActiveId = defaultFacilityFhirId();
+  const q = String(query || '').trim().toLowerCase();
+
+  const filtered = (facilities || []).filter((f) => {
+    if (!q) return true;
+    return (
+      (f.name || '').toLowerCase().includes(q) ||
+      (f.nhfrCode || '').toLowerCase().includes(q) ||
+      (f.city || '').toLowerCase().includes(q) ||
+      (f.province || '').toLowerCase().includes(q) ||
+      (f.fhirId || '').toLowerCase().includes(q)
+    );
+  });
+
+  if (!filtered.length) {
+    container.innerHTML = `<p class="placeholder" style="padding: 1.5rem; text-align: center;">No facilities found matching "${escapeHtml(q)}"</p>`;
+    return;
+  }
+
+  container.innerHTML = filtered
+    .map((f) => {
+      const isActive = String(f.fhirId || f.id) === String(currentActiveId);
+      const activeClass = isActive ? 'is-active' : '';
+      const location = [f.city, f.province].filter(Boolean).join(', ');
+      return `
+        <button type="button" class="facility-card-item ${activeClass}" data-facility-id="${escapeHtml(f.fhirId || f.id)}">
+          <div class="fac-meta-left">
+            <div class="fac-meta-title">${escapeHtml(f.name)}</div>
+            <div class="fac-meta-details">
+              ${f.nhfrCode ? `<span class="fac-badge">NHFR: ${escapeHtml(f.nhfrCode)}</span>` : ''}
+              ${location ? `<span>📍 ${escapeHtml(location)}</span>` : ''}
+              <span class="muted">ID: ${escapeHtml(f.fhirId || f.id)}</span>
+            </div>
+          </div>
+          <div class="fac-meta-right">
+            ${isActive ? '<span class="fac-badge fac-badge-active">✓ Active</span>' : '<span class="fac-badge">Select</span>'}
+          </div>
+        </button>
+      `;
+    })
+    .join('');
+
+  container.querySelectorAll('.facility-card-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.facilityId;
+      const targetFac = facilities.find((x) => String(x.fhirId || x.id) === String(targetId));
+      if (targetFac) {
+        setActiveFacility(targetFac);
+      }
+    });
+  });
+}
+
+async function openFacilitySwitcherModal() {
+  const modal = $('#facilitySwitcherModal');
+  if (!modal) return;
+  modal.hidden = false;
+  const input = $('#facilitySearchInput');
+  if (input) {
+    input.value = '';
+    setTimeout(() => input.focus(), 50);
+  }
+  const container = $('#facilityPickerList');
+  if (container) {
+    container.innerHTML = '<p class="placeholder" style="padding: 1rem; text-align: center;">Loading facilities…</p>';
+  }
+  const facilities = await loadAllFacilitiesForSwitcher();
+  renderFacilityPickerList(facilities, '');
+
+  if (input) {
+    input.oninput = (e) => {
+      renderFacilityPickerList(facilities, e.target.value);
+    };
+  }
+}
+
+function closeFacilitySwitcherModal() {
+  const modal = $('#facilitySwitcherModal');
+  if (modal) modal.hidden = true;
 }
 
 function formatPractitionerDisplayName(p) {
@@ -945,14 +1107,7 @@ function applyHealthData(data) {
     $('#lastChecked').textContent = new Date(data.checkedAt).toLocaleString();
   }
 
-  const facilityName = data.defaultFacility?.name;
-  if (facilityName && $('#teamLabel')) {
-    $('#teamLabel').textContent = facilityName;
-  }
-  if ($('#teamChip')) {
-    const team = data.teamPrefix || 'TEAM';
-    $('#teamChip').textContent = `${team} - Connectathon`;
-  }
+  syncActiveFacilityUi();
 
   if (state.inbox.receivingOrgFhirId == null) {
     // Default to all facilities so the first Incoming load is not empty.
@@ -6152,13 +6307,23 @@ document.addEventListener('click', async (e) => {
       closePractitionerQuickModal();
     } else if (closer?.dataset?.closeModal === 'practitionerRoleQuick') {
       closePractitionerRoleQuickModal();
+    } else if (closer?.dataset?.closeModal === 'facilitySwitcher') {
+      closeFacilitySwitcherModal();
     } else {
       closeRecordModal();
       closeReferralSyncModal();
       closePatientPickerModal();
       closeTransferReferralModal();
       closeFhirBundlePreviewModal();
+      closeFacilitySwitcherModal();
     }
+    return;
+  }
+
+  const facSwitcherBtn = e.target.closest('#facilitySwitcherBtn');
+  if (facSwitcherBtn) {
+    e.preventDefault();
+    openFacilitySwitcherModal();
     return;
   }
 
@@ -6763,6 +6928,7 @@ $('#welcomeDate').textContent = new Date().toLocaleString(undefined, {
   minute: '2-digit',
 });
 
+syncActiveFacilityUi();
 setView(getInitialView());
 initRealtime();
 initAllSearchableSelects();
