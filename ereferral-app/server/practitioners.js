@@ -10,6 +10,8 @@ const {
   getPractitionerRole,
   searchPractitionerRoles,
   attachRolesToPractitioners,
+  buildPractitionerBundle,
+  submitPractitionerBundle,
   DEFAULT_ROLE_CODE,
   DEFAULT_ROLE_DISPLAY,
   deleteResource,
@@ -343,6 +345,16 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+router.post('/bundle-preview', (req, res) => {
+  const b = req.body || {};
+  try {
+    const bundle = buildPractitionerBundle(b);
+    res.json({ bundle });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   const b = req.body || {};
   const required = ['prcId', 'familyName', 'givenName'];
@@ -352,7 +364,7 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const nextNum = db.prepare('SELECT COUNT(*) AS c FROM Practitioners').get().c + 1;
+    const nextNum = (db.prepare('SELECT COUNT(*) AS c FROM Practitioners').get()?.c || 0) + 1;
     const localCode = b.localCode || `${TEAM_PREFIX}-R${String(nextNum).padStart(4, '0')}`;
     const fields = applyPracFields(b);
 
@@ -371,20 +383,41 @@ router.post('/', async (req, res) => {
       ...fields,
     });
 
-    let row = db.prepare('SELECT * FROM Practitioners WHERE Id = ?').get(info.lastInsertRowid);
+    let row = db.prepare('SELECT * FROM Practitioners WHERE Id = ?').get(info.lastInsertRowid) || {
+      Id: info.lastInsertRowid,
+      LocalCode: localCode,
+      ...fields,
+    };
     const name = displayName(row);
 
     let fhirResult = null;
     let roleResult = null;
+    let transactionResult = null;
+
     try {
-      fhirResult = await putPractitioner(row);
+      if (b.roleCode || b.organizationFhirId) {
+        // Submit atomically as a FHIR Transaction Bundle
+        const bundle = buildPractitionerBundle({ ...row, ...b });
+        transactionResult = await submitPractitionerBundle(bundle);
+        fhirResult = {
+          fhirId: transactionResult.practitionerFhirId,
+          status: transactionResult.status,
+        };
+        if (transactionResult.roleFhirId) {
+          roleResult = {
+            fhirId: transactionResult.roleFhirId,
+            status: transactionResult.status,
+          };
+        }
+      } else {
+        fhirResult = await putPractitioner(row);
+      }
+
       row = {
         ...row,
-        FhirId: fhirResult.fhirId,
+        FhirId: fhirResult?.fhirId || row.FhirId || null,
+        RoleFhirId: roleResult?.fhirId || row.RoleFhirId || null,
       };
-      if (shouldSyncEmbeddedRole(row)) {
-        roleResult = await syncPractitionerRole(row);
-      }
 
       db.prepare(`
         UPDATE Practitioners
@@ -397,17 +430,17 @@ router.post('/', async (req, res) => {
         WHERE Id = @Id
       `).run({
         Id: row.Id,
-        FhirId: fhirResult.fhirId,
-        RoleFhirId: roleResult?.fhirId || null,
+        FhirId: row.FhirId,
+        RoleFhirId: row.RoleFhirId,
       });
 
-      row = db.prepare('SELECT * FROM Practitioners WHERE Id = ?').get(row.Id);
+      row = db.prepare('SELECT * FROM Practitioners WHERE Id = ?').get(row.Id) || row;
       logActivity({
         eventType: 'Practitioner',
         entityName: name,
-        actionText: 'Practitioner saved',
+        actionText: 'Practitioner & Role saved (Bundle)',
         syncStatus: 'synced',
-        details: `FHIR ID: ${fhirResult.fhirId}${roleResult?.fhirId ? `; Role: ${roleResult.fhirId}` : ''}`,
+        details: `Practitioner FHIR ID: ${row.FhirId}${row.RoleFhirId ? `; Role: ${row.RoleFhirId}` : ''}`,
       });
     } catch (fhirErr) {
       db.prepare(`
@@ -418,7 +451,7 @@ router.post('/', async (req, res) => {
         WHERE Id = @Id
       `).run({ Id: row.Id, SyncError: fhirErr.message });
 
-      row = db.prepare('SELECT * FROM Practitioners WHERE Id = ?').get(row.Id);
+      row = db.prepare('SELECT * FROM Practitioners WHERE Id = ?').get(row.Id) || row;
       logActivity({
         eventType: 'Practitioner',
         entityName: name,
@@ -432,6 +465,7 @@ router.post('/', async (req, res) => {
       practitioner: mapPractitioner(row),
       fhir: fhirResult ? { id: fhirResult.fhirId, status: fhirResult.status } : null,
       role: roleResult ? { id: roleResult.fhirId, status: roleResult.status } : null,
+      bundle: transactionResult?.bundleResponse || null,
     });
   } catch (err) {
     const msg = err.message || String(err);
@@ -453,16 +487,27 @@ router.put('/fhir/:fhirId', async (req, res) => {
   }
 
   try {
-    const fhirResult = await updatePractitionerById(req.params.fhirId, b);
-    const rolePayload = { ...b, fhirId: req.params.fhirId };
+    let fhirResult = null;
     let roleResult = null;
-    try {
-      roleResult = b.roleFhirId
-        ? await updatePractitionerRoleById(b.roleFhirId, rolePayload)
-        : await putPractitionerRole(rolePayload);
-    } catch {
-      // Practitioner update succeeded even if role sync fails.
+    let transactionResult = null;
+
+    if (b.roleCode || b.organizationFhirId) {
+      const bundle = buildPractitionerBundle({ ...b, fhirId: req.params.fhirId, RoleFhirId: b.roleFhirId });
+      transactionResult = await submitPractitionerBundle(bundle);
+      fhirResult = {
+        fhirId: transactionResult.practitionerFhirId || req.params.fhirId,
+        status: transactionResult.status,
+      };
+      if (transactionResult.roleFhirId || b.roleFhirId) {
+        roleResult = {
+          fhirId: transactionResult.roleFhirId || b.roleFhirId,
+          status: transactionResult.status,
+        };
+      }
+    } else {
+      fhirResult = await updatePractitionerById(req.params.fhirId, b);
     }
+
     const practitioner = await getPractitioner(req.params.fhirId);
     const [enriched] = attachRolesToPractitioners(
       [
@@ -479,14 +524,15 @@ router.put('/fhir/:fhirId', async (req, res) => {
     logActivity({
       eventType: 'Practitioner',
       entityName: `${b.prefix ? `${b.prefix} ` : ''}${b.givenName} ${b.familyName}`,
-      actionText: 'Practitioner updated on FHIR',
+      actionText: 'Practitioner & Role updated on FHIR (Bundle)',
       syncStatus: 'synced',
-      details: `FHIR ID: ${req.params.fhirId}`,
+      details: `FHIR ID: ${req.params.fhirId}${roleResult?.fhirId ? `; Role: ${roleResult.fhirId}` : ''}`,
     });
     res.json({
       practitioner: enriched,
       fhir: { id: fhirResult.fhirId, status: fhirResult.status },
       role: roleResult ? { id: roleResult.fhirId, status: roleResult.status } : null,
+      bundle: transactionResult?.bundleResponse || null,
     });
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });

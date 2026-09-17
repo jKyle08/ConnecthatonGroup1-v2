@@ -1103,6 +1103,107 @@ async function updatePractitionerRoleById(fhirId, pracData) {
   };
 }
 
+function buildPractitionerBundle(payload) {
+  const pracData = payload.practitioner || payload;
+  const roleData = payload.role || payload;
+  const prcId = String(pracData.PrcId || pracData.prcId || '').trim();
+  const pracFhirId = pracData.FhirId || pracData.fhirId || null;
+  const roleFhirId =
+    roleData.RoleFhirId || roleData.roleFhirId || roleData.FhirId || roleData.fhirId || null;
+  const orgFhirId =
+    roleData.OrganizationFhirId ||
+    roleData.organizationFhirId ||
+    pracData.OrganizationFhirId ||
+    pracData.organizationFhirId ||
+    null;
+
+  const pracUuid = `urn:uuid:${crypto.randomUUID().toLowerCase()}`;
+  const roleUuid = `urn:uuid:${crypto.randomUUID().toLowerCase()}`;
+
+  const pracResource = buildPractitionerResource({
+    ...pracData,
+    prcId,
+  });
+
+  const roleResource = buildPractitionerRoleResource({
+    ...roleData,
+    prcId,
+    organizationFhirId: orgFhirId,
+    practitionerFhirId: pracFhirId || null,
+  });
+
+  if (pracFhirId) {
+    roleResource.practitioner = { reference: `Practitioner/${pracFhirId}` };
+  } else {
+    roleResource.practitioner = { reference: pracUuid };
+  }
+
+  const entries = [
+    {
+      fullUrl: pracFhirId ? `${FHIR_BASE_URL}/Practitioner/${pracFhirId}` : pracUuid,
+      resource: pracResource,
+      request: pracFhirId
+        ? { method: 'PUT', url: `Practitioner/${encodeURIComponent(pracFhirId)}` }
+        : {
+            method: 'PUT',
+            url: `Practitioner?identifier=${encodeURIComponent(PRC_SYSTEM)}|${encodeURIComponent(prcId)}`,
+          },
+    },
+    {
+      fullUrl: roleFhirId ? `${FHIR_BASE_URL}/PractitionerRole/${roleFhirId}` : roleUuid,
+      resource: roleResource,
+      request: roleFhirId
+        ? { method: 'PUT', url: `PractitionerRole/${encodeURIComponent(roleFhirId)}` }
+        : {
+            method: 'PUT',
+            url: `PractitionerRole?identifier=${encodeURIComponent(PRC_SYSTEM)}|${encodeURIComponent(prcId)}`,
+          },
+    },
+  ];
+
+  return {
+    resourceType: 'Bundle',
+    language: 'en',
+    type: 'transaction',
+    timestamp: new Date().toISOString(),
+    entry: entries,
+  };
+}
+
+async function submitPractitionerBundle(bundle) {
+  const res = await fetch(FHIR_BASE_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/fhir+json',
+      Accept: 'application/fhir+json',
+    },
+    body: JSON.stringify(bundle),
+  });
+
+  const json = await parseFhirResponse(res);
+
+  let practitionerFhirId = null;
+  let roleFhirId = null;
+
+  (json?.entry || []).forEach((e) => {
+    const loc = String(e.response?.location || '');
+    if (loc.includes('PractitionerRole/')) {
+      const id = loc.split('PractitionerRole/')[1]?.split('/')[0];
+      if (id) roleFhirId = id;
+    } else if (loc.includes('Practitioner/')) {
+      const id = loc.split('Practitioner/')[1]?.split('/')[0];
+      if (id) practitionerFhirId = id;
+    }
+  });
+
+  return {
+    status: res.status,
+    bundleResponse: json,
+    practitionerFhirId,
+    roleFhirId,
+  };
+}
+
 async function searchPractitionerRoles({
   count = 200,
   q,
@@ -1245,12 +1346,8 @@ function attachRolesToPractitioners(practitioners, roles) {
   });
 }
 
-function uuidRef(label = '') {
-  const stamp = Date.now();
-  const suffix = label
-    ? `${label}-${stamp}-${crypto.randomBytes(3).toString('hex')}`
-    : crypto.randomUUID();
-  return `urn:uuid:${suffix}`;
+function uuidRef(_label = '') {
+  return `urn:uuid:${crypto.randomUUID().toLowerCase()}`;
 }
 
 function refPatient(fhirId) {
@@ -2980,6 +3077,8 @@ module.exports = {
   searchPractitionerRoles,
   mapFhirPractitionerRole,
   buildPractitionerRoleResource,
+  buildPractitionerBundle,
+  submitPractitionerBundle,
   attachRolesToPractitioners,
   buildReferralBundle,
   submitReferralBundle,

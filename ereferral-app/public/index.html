@@ -89,13 +89,7 @@
         <button type="button" data-view="practitioners">
           <span class="nav-label">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm0 2c-4.4 0-8 2.2-8 5v1h16v-1c0-2.8-3.6-5-8-5Z"/></svg>
-            Practitioners
-          </span>
-        </button>
-        <button type="button" data-view="practitioner-roles">
-          <span class="nav-label">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v5H4V4Zm9 0h7v9h-7V4ZM4 11h7v9H4v-9Zm9 5h7v4h-7v-4Z"/></svg>
-            Practitioner Roles
+            Practitioners & Roles
           </span>
         </button>
         <button type="button" data-view="sync">
@@ -824,12 +818,12 @@
         <section class="view" id="view-practitioners">
           <div class="page-head-row">
             <div class="page-head">
-              <h2>Practitioner Directory</h2>
-              <p id="practitionersSubtitle">Manage healthcare practitioners, doctors, and PRC license identifiers</p>
+              <h2>Practitioners & Roles Directory</h2>
+              <p id="practitionersSubtitle">Manage clinicians, healthcare practitioners, and facility assignments (FHIR Transaction Bundles)</p>
             </div>
             <div class="form-actions" style="margin:0;">
               <button class="btn btn-teal" type="button" id="btnRefreshPracs">Refresh from FHIR</button>
-              <button class="btn btn-primary" type="button" id="btnOpenPractitionerModal">+ Add Practitioner</button>
+              <button class="btn btn-primary" type="button" id="btnOpenPractitionerModal">+ Add Practitioner & Role</button>
             </div>
           </div>
 
@@ -840,8 +834,8 @@
                   id="pracSearch"
                   type="search"
                   name="q"
-                  placeholder="Search name, PRC, FHIR ID…"
-                  aria-label="Search practitioners"
+                  placeholder="Search name, PRC, role, facility, FHIR ID…"
+                  aria-label="Search practitioners and roles"
                 />
                 <button class="btn btn-secondary" type="submit">Search</button>
                 <button class="btn btn-secondary" type="button" id="pracSearchClear">Clear</button>
@@ -854,15 +848,16 @@
                 <thead>
                   <tr>
                     <th>FHIR ID</th>
-                    <th>Name</th>
-                    <th>PRC ID</th>
-                    <th>Role</th>
+                    <th>Practitioner</th>
+                    <th>PRC License</th>
+                    <th>Role / Specialty</th>
+                    <th>Affiliated Facility</th>
                     <th>Phone</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody id="practitionersBody">
-                  <tr><td colspan="6" class="placeholder">Loading…</td></tr>
+                  <tr><td colspan="7" class="placeholder">Loading…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -878,8 +873,8 @@
         <section class="view" id="view-practitioner-form" hidden>
           <div class="page-head-row">
             <div class="page-head">
-              <h2 id="practitionerFormTitle">Add Practitioner</h2>
-              <p id="practitionerFormSubtitle">Saved locally, then PUT to FHIR by PRC identifier</p>
+              <h2 id="practitionerFormTitle">Add Practitioner & Role</h2>
+              <p id="practitionerFormSubtitle">Submits Practitioner and PractitionerRole atomically as a FHIR Transaction Bundle</p>
             </div>
             <button class="btn btn-secondary" type="button" data-view="practitioners">Back to list</button>
           </div>
@@ -887,12 +882,16 @@
           <form class="card" id="practitionerForm" novalidate>
             <input type="hidden" name="editId" id="practitionerEditId" value="" />
             <input type="hidden" name="editFhirId" id="practitionerEditFhirId" value="" />
+            <input type="hidden" name="roleFhirId" id="practitionerEditRoleFhirId" value="" />
+            <input type="hidden" name="roleCode" id="practitionerFormRoleCode" value="158965000" />
+            <input type="hidden" name="roleDisplay" id="practitionerFormRoleDisplay" value="Doctor" />
+            <input type="hidden" name="roleSystem" id="practitionerFormRoleSystem" value="http://snomed.info/sct" />
 
             <div class="alert" id="practitionerFormAlert" style="margin-bottom: 1rem;">
-              Use your team's unique PRC license numbers. Do not overwrite seeded demo practitioners.
+              Use your team's unique PRC license number. Both Practitioner and PractitionerRole are saved as a single atomic FHIR transaction bundle.
             </div>
 
-            <div class="section-title">Clinician</div>
+            <div class="section-title">Clinician Information</div>
             <div class="form-grid">
               <label>Prefix
                 <input name="prefix" placeholder="e.g. Dr." />
@@ -903,6 +902,14 @@
               <label>Family Name *
                 <input name="familyName" required placeholder="e.g. Dela Cruz" />
               </label>
+              <label>Gender *
+                <select name="gender" required>
+                  <option value="male" selected>Male</option>
+                  <option value="female">Female</option>
+                  <option value="other">Other</option>
+                  <option value="unknown">Unknown</option>
+                </select>
+              </label>
               <label>PRC License No. *
                 <input name="prcId" required placeholder="e.g. TEAM07-1122334" />
               </label>
@@ -911,22 +918,29 @@
               </label>
             </div>
 
-            <div class="section-title">Practitioner Role</div>
+            <div class="section-title">Facility & Role Assignment</div>
             <div class="form-grid">
-              <label>Role Code *
-                <input name="roleCode" required placeholder="e.g. 158965000" />
+              <label class="full">Facility / Organization *
+                <select name="organizationFhirId" id="practitionerFormOrgSelect" required data-placeholder="-- Select Facility / Organization --">
+                  <option value="">-- Select Facility / Organization --</option>
+                </select>
               </label>
-              <label>Role Display *
-                <input name="roleDisplay" required placeholder="e.g. Medical practitioner" />
-              </label>
-              <label class="full">Organization FHIR ID
-                <input name="organizationFhirId" placeholder="Optional Organization/{id} target id" />
+              <label class="full">Role / Clinical Specialty *
+                <select
+                  name="roleSpecialty"
+                  id="practitionerFormRoleSelect"
+                  class="role-specialty-select"
+                  required
+                  data-placeholder="Pick a DOH role, or type to filter..."
+                >
+                  <option value=""></option>
+                </select>
               </label>
             </div>
 
             <div class="form-actions">
               <button class="btn btn-secondary" type="button" data-view="practitioners">Cancel</button>
-              <button class="btn btn-primary" type="submit" id="savePractitionerBtn">Save</button>
+              <button class="btn btn-primary" type="submit" id="savePractitionerBtn">Save as FHIR Bundle</button>
             </div>
           </form>
         </section>
@@ -1096,7 +1110,7 @@
               <path d="M4.5 20.2c1.7-3.1 4.3-4.7 7.5-4.7s5.8 1.6 7.5 4.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
             </svg>
           </span>
-          <h2 id="practitionerQuickTitle">Add New Practitioner</h2>
+          <h2 id="practitionerQuickTitle">Add Practitioner & Role (Bundle)</h2>
         </div>
         <button class="modal-close" type="button" data-close-modal="practitionerQuick" aria-label="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/></svg>
@@ -1105,6 +1119,10 @@
       <form class="modal-body entity-quick-body" id="practitionerQuickForm" autocomplete="off" novalidate>
         <input type="hidden" name="editId" id="practitionerQuickEditId" value="" />
         <input type="hidden" name="editFhirId" id="practitionerQuickEditFhirId" value="" />
+        <input type="hidden" name="roleFhirId" id="practitionerQuickEditRoleFhirId" value="" />
+        <input type="hidden" name="roleCode" id="practitionerQuickRoleCode" value="158965000" />
+        <input type="hidden" name="roleDisplay" id="practitionerQuickRoleDisplay" value="Doctor" />
+        <input type="hidden" name="roleSystem" id="practitionerQuickRoleSystem" value="http://snomed.info/sct" />
         <div class="entity-quick-grid">
           <label class="full">
             <span>Practitioner Full Name <em>*</em></span>
@@ -1123,12 +1141,34 @@
             <span>PRC License Number <em>*</em></span>
             <input name="prcId" required placeholder="e.g. PRC-123456" />
           </label>
+          <label class="full">
+            <span>Phone</span>
+            <input name="phone" placeholder="+63-9xx-xxx-xxxx" />
+          </label>
+          <label class="full">
+            <span>Affiliated Facility / Organization <em>*</em></span>
+            <select name="organizationFhirId" id="practitionerQuickOrgSelect" required data-placeholder="-- Select Facility --">
+              <option value="">-- Select Facility --</option>
+            </select>
+          </label>
+          <label class="full">
+            <span>Role / Clinical Specialty <em>*</em></span>
+            <select
+              name="roleSpecialty"
+              id="practitionerQuickRoleSelect"
+              class="role-specialty-select"
+              required
+              data-placeholder="Pick a DOH role, or type to filter..."
+            >
+              <option value=""></option>
+            </select>
+          </label>
         </div>
       </form>
       <div class="modal-footer entity-quick-footer">
         <button class="btn btn-secondary" type="button" data-close-modal="practitionerQuick">Cancel</button>
         <button class="btn btn-primary btn-entity-save" type="submit" form="practitionerQuickForm" id="savePractitionerQuickBtn">
-          Save Practitioner
+          Save as FHIR Bundle
         </button>
       </div>
     </div>

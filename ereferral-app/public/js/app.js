@@ -682,6 +682,7 @@ function parsePractitionerFullName(raw) {
 }
 
 function buildPractitionerPayloadFromForm(form) {
+  syncRoleSpecialtyHidden(form);
   const entries = Object.fromEntries(new FormData(form).entries());
   if (form.fullName) {
     const parsed = parsePractitionerFullName(entries.fullName);
@@ -692,6 +693,7 @@ function buildPractitionerPayloadFromForm(form) {
   }
   delete entries.editId;
   delete entries.editFhirId;
+  delete entries.roleSpecialty;
   return entries;
 }
 
@@ -712,13 +714,39 @@ function resetPractitionerQuickForm() {
   state.pracFormMode = 'create';
   $('#practitionerQuickEditId').value = '';
   $('#practitionerQuickEditFhirId').value = '';
-  $('#practitionerQuickTitle').textContent = 'Add New Practitioner';
+  if ($('#practitionerQuickEditRoleFhirId')) $('#practitionerQuickEditRoleFhirId').value = '';
+  $('#practitionerQuickTitle').textContent = 'Add Practitioner & Role (Bundle)';
   if (form.gender) form.gender.value = 'male';
   const stamp = Date.now().toString().slice(-6);
   if (form.prcId) {
     const team = state.health?.teamPrefix || 'TEAM07';
     form.prcId.value = `${team}-${stamp}`;
   }
+  populateFacilityDropdown($('#practitionerQuickOrgSelect'), defaultFacilityFhirId());
+  setRoleSpecialtyValue(form, DEFAULT_ROLE_CODE, DEFAULT_ROLE_DISPLAY, DEFAULT_ROLE_SYSTEM);
+}
+
+async function populateFacilityDropdown(selectEl, selectedFhirId = '') {
+  if (!selectEl) return;
+  if (!state.practitionerRoles.lookups.organizations.length) {
+    try {
+      const res = await fetch('/api/organizations?source=fhir&count=200');
+      const data = await res.json();
+      state.practitionerRoles.lookups.organizations = data.organizations || [];
+    } catch {
+      // fallback
+    }
+  }
+  const orgs = state.practitionerRoles.lookups.organizations || [];
+  const options = ['<option value="">-- Select Facility / Organization --</option>'];
+  orgs.forEach((o) => {
+    const fId = o.fhirId || o.id;
+    const isSel = String(fId) === String(selectedFhirId) ? 'selected' : '';
+    options.push(
+      `<option value="${escapeHtml(fId)}" ${isSel}>${escapeHtml(o.name || fId)} (${escapeHtml(o.nhfrCode || o.localCode || fId)})</option>`
+    );
+  });
+  selectEl.innerHTML = options.join('');
 }
 
 function fillPractitionerQuickForm(p) {
@@ -727,15 +755,33 @@ function fillPractitionerQuickForm(p) {
   if (form.fullName) {
     form.fullName.value = formatPractitionerDisplayName(p) || '';
   }
-  if (form.gender) form.gender.value = p.gender || 'unknown';
+  if (form.gender) form.gender.value = p.gender || 'male';
   if (form.prcId) form.prcId.value = p.prcId && p.prcId !== '-' ? p.prcId : '';
+  if (form.phone) form.phone.value = p.phone || '';
   $('#practitionerQuickEditId').value = p.id || '';
   $('#practitionerQuickEditFhirId').value = p.fhirId || '';
-  $('#practitionerQuickTitle').textContent = 'Edit Practitioner';
+  if ($('#practitionerQuickEditRoleFhirId')) {
+    $('#practitionerQuickEditRoleFhirId').value = p.roleFhirId || '';
+  }
+  $('#practitionerQuickTitle').textContent = 'Edit Practitioner & Role';
+  populateFacilityDropdown(
+    $('#practitionerQuickOrgSelect'),
+    p.organizationFhirId || defaultFacilityFhirId()
+  );
+  setRoleSpecialtyValue(
+    form,
+    p.roleCode || DEFAULT_ROLE_CODE,
+    p.roleDisplay || DEFAULT_ROLE_DISPLAY,
+    p.roleSystem || DEFAULT_ROLE_SYSTEM
+  );
 }
 
-function openPractitionerQuickModal(mode = 'create') {
-  if (mode === 'create') resetPractitionerQuickForm();
+function openPractitionerQuickModal(mode = 'create', practitioner = null) {
+  if (mode === 'create') {
+    resetPractitionerQuickForm();
+  } else if (practitioner) {
+    fillPractitionerQuickForm(practitioner);
+  }
   const modal = $('#practitionerQuickModal');
   if (modal) modal.hidden = false;
 }
@@ -1894,7 +1940,7 @@ function renderPractitionersTable() {
   updatePracPager();
 
   if (!practitioners.length) {
-    body.innerHTML = `<tr><td colspan="6" class="placeholder">${
+    body.innerHTML = `<tr><td colspan="7" class="placeholder">${
       query ? 'No practitioners match your search' : 'No practitioners found'
     }</td></tr>`;
     return;
@@ -1903,12 +1949,18 @@ function renderPractitionersTable() {
   body.innerHTML = practitioners
     .map((p) => {
       const fhirId = p.fhirId || '-';
-      const name = [p.givenName, p.familyName].filter(Boolean).join(' ') || '-';
+      const name = [p.prefix, p.givenName, p.familyName].filter(Boolean).join(' ') || '-';
+      const roleText = p.roleDisplay || p.roleCode || 'Doctor';
+      const facilityText = p.organizationName || p.organizationFhirId || '-';
       return `<tr>
           <td><span class="cell-truncate" title="${escapeHtml(fhirId)}">${escapeHtml(fhirId)}</span></td>
-          <td><span class="cell-ellipsis" title="${escapeHtml(name)}">${escapeHtml(name)}</span></td>
-          <td>${escapeHtml(p.prcId || '-')}</td>
-          <td><span class="cell-ellipsis" title="${escapeHtml(p.roleDisplay || p.roleCode || '-')}">${escapeHtml(p.roleDisplay || p.roleCode || '-')}</span></td>
+          <td>
+            <strong class="cell-ellipsis" title="${escapeHtml(name)}">${escapeHtml(name)}</strong>
+            <small class="muted" style="display:block; font-size:12px;">${escapeHtml(p.gender ? (p.gender[0].toUpperCase() + p.gender.slice(1)) : '')}</small>
+          </td>
+          <td><span class="code-badge">${escapeHtml(p.prcId || '-')}</span></td>
+          <td><span class="badge badge-info" title="${escapeHtml(roleText)}">${escapeHtml(roleText)}</span></td>
+          <td><span class="cell-ellipsis" title="${escapeHtml(facilityText)}">${escapeHtml(facilityText)}</span></td>
           <td>${escapeHtml(p.phone || '-')}</td>
           <td>${practitionerActionButtons(p)}</td>
         </tr>`;
@@ -2772,14 +2824,17 @@ function resetPractitionerForm() {
   state.pracFormMode = 'create';
   $('#practitionerEditId').value = '';
   $('#practitionerEditFhirId').value = '';
-  $('#practitionerFormTitle').textContent = 'Add Practitioner';
-  $('#practitionerFormSubtitle').textContent = 'Saved locally, then PUT to FHIR by PRC identifier';
+  if ($('#practitionerEditRoleFhirId')) $('#practitionerEditRoleFhirId').value = '';
+  $('#practitionerFormTitle').textContent = 'Add Practitioner & Role';
+  $('#practitionerFormSubtitle').textContent = 'Submits Practitioner and PractitionerRole atomically as a FHIR Transaction Bundle';
   $('#practitionerFormAlert').hidden = false;
   $('#savePractitionerBtn').hidden = false;
-  setSaveButtonLabel($('#savePractitionerBtn'), 'Save');
+  setSaveButtonLabel($('#savePractitionerBtn'), 'Save as FHIR Bundle');
   setPracFormReadonly(false);
   seedPractitionerIds(form);
   form.dataset.seeded = '1';
+  populateFacilityDropdown($('#practitionerFormOrgSelect'), defaultFacilityFhirId());
+  setRoleSpecialtyValue(form, DEFAULT_ROLE_CODE, DEFAULT_ROLE_DISPLAY, DEFAULT_ROLE_SYSTEM);
 }
 
 function setPracFormReadonly(readonly) {
@@ -2797,6 +2852,7 @@ function fillPractitionerForm(p) {
     'prefix',
     'givenName',
     'familyName',
+    'gender',
     'prcId',
     'phone',
     'roleCode',
@@ -2811,7 +2867,20 @@ function fillPractitionerForm(p) {
   if (form.roleSystem && !form.roleSystem.value) form.roleSystem.value = DEFAULT_ROLE_SYSTEM;
   $('#practitionerEditId').value = p.id || '';
   $('#practitionerEditFhirId').value = p.fhirId || '';
+  if ($('#practitionerEditRoleFhirId')) {
+    $('#practitionerEditRoleFhirId').value = p.roleFhirId || '';
+  }
   form.dataset.seeded = '1';
+  populateFacilityDropdown(
+    $('#practitionerFormOrgSelect'),
+    p.organizationFhirId || defaultFacilityFhirId()
+  );
+  setRoleSpecialtyValue(
+    form,
+    p.roleCode || DEFAULT_ROLE_CODE,
+    p.roleDisplay || DEFAULT_ROLE_DISPLAY,
+    p.roleSystem || DEFAULT_ROLE_SYSTEM
+  );
 }
 
 async function openPractitioner(mode, { id, fhirId }) {
@@ -5673,6 +5742,7 @@ async function saveOrganization(e) {
 async function savePractitioner(e) {
   e.preventDefault();
   const form = e.target;
+  syncRoleSpecialtyHidden(form);
   if (!validateForm(form)) return;
 
   const isQuick = form.id === 'practitionerQuickForm';
@@ -5685,6 +5755,7 @@ async function savePractitioner(e) {
   if (!isQuick) {
     delete payload.editId;
     delete payload.editFhirId;
+    delete payload.roleSpecialty;
   }
 
   const editId = isQuick
@@ -5693,12 +5764,22 @@ async function savePractitioner(e) {
   const editFhirId = isQuick
     ? $('#practitionerQuickEditFhirId').value
     : $('#practitionerEditFhirId').value;
+  const editRoleFhirId = isQuick
+    ? $('#practitionerQuickEditRoleFhirId')?.value
+    : $('#practitionerEditRoleFhirId')?.value;
+
+  if (editRoleFhirId) {
+    payload.roleFhirId = editRoleFhirId;
+  }
 
   try {
     await runSaveWithFhirProgress(
       {
-        title: state.pracFormMode === 'edit' ? 'Saving changes' : 'Saving practitioner',
-        entityLabel: 'practitioner',
+        title:
+          state.pracFormMode === 'edit'
+            ? 'Saving Practitioner & Role'
+            : 'Saving Practitioner & Role Bundle',
+        entityLabel: 'practitioner & role',
       },
       async ({ setProgressStep, completeProgressModal }) => {
         let res;
@@ -5709,11 +5790,14 @@ async function savePractitioner(e) {
             body: JSON.stringify(payload),
           });
         } else if (state.pracFormMode === 'edit' && editFhirId) {
-          res = await fetch(`/api/practitioners/fhir/${encodeURIComponent(editFhirId)}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
+          res = await fetch(
+            `/api/practitioners/fhir/${encodeURIComponent(editFhirId)}`,
+            {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            }
+          );
         } else {
           res = await fetch('/api/practitioners', {
             method: 'POST',
@@ -5733,15 +5817,19 @@ async function savePractitioner(e) {
         }
 
         const practitioner = data.practitioner;
-        if (practitioner?.syncStatus === 'synced' || data.fhir?.id) {
+        const pracId = practitioner?.fhirId || data.fhir?.id;
+        const roleId = data.role?.id ? ` | Role FHIR: ${data.role.id}` : '';
+        if (practitioner?.syncStatus === 'synced' || pracId) {
           showToast(
-            `Saved locally + FHIR ID ${practitioner?.fhirId || data.fhir?.id}`,
+            `Saved FHIR Bundle: Practitioner ${pracId}${roleId}`,
             'ok',
-            { title: 'Practitioner saved' }
+            { title: 'Practitioner & Role saved' }
           );
         } else if (practitioner?.syncStatus === 'failed') {
           showToast(
-            `Saved locally, FHIR sync failed: ${practitioner?.syncError || 'unknown'}`,
+            `Saved locally, FHIR sync failed: ${
+              practitioner?.syncError || 'unknown'
+            }`,
             'warn',
             { title: 'Partial save' }
           );
@@ -6297,6 +6385,12 @@ $('#btnOpenPractitionerModal')?.addEventListener('click', () => openPractitioner
 $('#btnOpenPractitionerRoleModal')?.addEventListener('click', () =>
   openPractitionerRoleQuickModal('create')
 );
+$('#practitionerQuickRoleSelect')?.addEventListener('change', () => {
+  syncRoleSpecialtyHidden($('#practitionerQuickForm'));
+});
+$('#practitionerFormRoleSelect')?.addEventListener('change', () => {
+  syncRoleSpecialtyHidden($('#practitionerForm'));
+});
 $('#rolePractitionerSelect')?.addEventListener('change', syncRoleQuickHiddenFields);
 $('#roleOrganizationSelect')?.addEventListener('change', syncRoleQuickHiddenFields);
 $('#roleSpecialtySelect')?.addEventListener('change', () => {
