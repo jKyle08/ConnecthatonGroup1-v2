@@ -8,6 +8,7 @@ const {
   DEFAULT_ROLE_CODE,
   DEFAULT_ROLE_DISPLAY,
   deleteResource,
+  deduplicatePractitionerRoles,
 } = require('./fhir');
 const { logActivity } = require('./activity');
 
@@ -134,7 +135,7 @@ function mergeRolesWithLocal(fhirRoles, localRoles) {
     .filter((local) => !usedLocalIds.has(local.id))
     .map((local) => ({ ...local, source: local.fhirId ? 'fhir' : 'local' }));
 
-  return sortRolesNewestFirst([...localOnly, ...merged]);
+  return sortRolesNewestFirst(deduplicatePractitionerRoles([...localOnly, ...merged]));
 }
 
 function loadLocalRoles() {

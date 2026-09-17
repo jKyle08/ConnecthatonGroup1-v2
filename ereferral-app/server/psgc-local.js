@@ -1,19 +1,56 @@
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, 'psgc-data');
+function loadPsgcDatasets() {
+  try {
+    const regions = require('./psgc-data/regions.json');
+    const provinces = require('./psgc-data/provinces.json');
+    const cities = require('./psgc-data/cities_municipalities.json');
+    const barangays = require('./psgc-data/barangays.json');
+    return { regions, provinces, cities, barangays };
+  } catch (requireErr) {
+    // Fallback to dynamic path resolution if static require is unavailable
+    const candidates = [
+      path.join(__dirname, 'psgc-data'),
+      path.join(__dirname, '..', 'server', 'psgc-data'),
+      path.join(__dirname, '..', '..', 'server', 'psgc-data'),
+      path.join(__dirname, 'server', 'psgc-data'),
+      path.join(__dirname, '..', 'psgc-data'),
+      path.join(process.cwd(), 'server', 'psgc-data'),
+      path.join(process.cwd(), 'ereferral-app', 'server', 'psgc-data'),
+      path.join(process.cwd(), 'psgc-data'),
+    ];
+
+    let resolvedDir = null;
+    for (const dir of candidates) {
+      try {
+        if (fs.existsSync(path.join(dir, 'regions.json'))) {
+          resolvedDir = dir;
+          break;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (resolvedDir) {
+      const read = (name) => JSON.parse(fs.readFileSync(path.join(resolvedDir, name), 'utf8'));
+      return {
+        regions: read('regions.json'),
+        provinces: read('provinces.json'),
+        cities: read('cities_municipalities.json'),
+        barangays: read('barangays.json'),
+      };
+    }
+
+    throw requireErr;
+  }
+}
+
 const RELEASE = '1Q-2026';
 const SOURCE = 'https://psa.gov.ph/classification/psgc';
 
 let loaded = null;
-
-function readJson(name) {
-  const file = path.join(DATA_DIR, name);
-  if (!fs.existsSync(file)) {
-    throw new Error(`Missing PSGC data file: ${file}`);
-  }
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
 
 function toOption(code, display) {
   const label = display || code;
@@ -35,10 +72,40 @@ function sortByName(a, b) {
  * 10-digit code prefixes instead.
  */
 function buildIndex() {
-  const regions = readJson('regions.json');
-  const provinces = readJson('provinces.json');
-  const cities = readJson('cities_municipalities.json');
-  const barangays = readJson('barangays.json');
+  let regions = [];
+  let provinces = [];
+  let cities = [];
+  let barangays = [];
+
+  try {
+    const data = loadPsgcDatasets();
+    regions = data.regions || [];
+    provinces = data.provinces || [];
+    cities = data.cities || [];
+    barangays = data.barangays || [];
+  } catch (err) {
+    console.warn('[psgc-local] Could not load local PSGC datasets, using default regions fallback:', err.message);
+    regions = [
+      { code: '1300000000', name: 'National Capital Region (NCR)' },
+      { code: '1400000000', name: 'Cordillera Administrative Region (CAR)' },
+      { code: '0100000000', name: 'Region I (Ilocos Region)' },
+      { code: '0200000000', name: 'Region II (Cagayan Valley)' },
+      { code: '0300000000', name: 'Region III (Central Luzon)' },
+      { code: '0400000000', name: 'Region IV-A (CALABARZON)' },
+      { code: '1700000000', name: 'MIMAROPA Region' },
+      { code: '0500000000', name: 'Region V (Bicol Region)' },
+      { code: '0600000000', name: 'Region VI (Western Visayas)' },
+      { code: '1800000000', name: 'Negros Island Region (NIR)' },
+      { code: '0700000000', name: 'Region VII (Central Visayas)' },
+      { code: '0800000000', name: 'Region VIII (Eastern Visayas)' },
+      { code: '0900000000', name: 'Region IX (Zamboanga Peninsula)' },
+      { code: '1000000000', name: 'Region X (Northern Mindanao)' },
+      { code: '1100000000', name: 'Region XI (Davao Region)' },
+      { code: '1200000000', name: 'Region XII (SOCCSKSARGEN)' },
+      { code: '1600000000', name: 'Region XIII (Caraga)' },
+      { code: '1900000000', name: 'Bangsamoro Autonomous Region In Muslim Mindanao (BARMM)' },
+    ];
+  }
 
   const byCode = new Map();
   const childrenOf = new Map();

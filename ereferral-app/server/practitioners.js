@@ -15,6 +15,7 @@ const {
   DEFAULT_ROLE_CODE,
   DEFAULT_ROLE_DISPLAY,
   deleteResource,
+  deduplicatePractitioners,
 } = require('./fhir');
 const { logActivity } = require('./activity');
 
@@ -172,7 +173,7 @@ function mergePracsWithLocal(fhirPractitioners, localPractitioners) {
     .filter((local) => !usedLocalIds.has(local.id))
     .map((local) => ({ ...local, source: local.fhirId ? 'fhir' : 'local' }));
 
-  return sortPractitionersNewestFirst([...localOnly, ...merged]);
+  return sortPractitionersNewestFirst(deduplicatePractitioners([...localOnly, ...merged]));
 }
 
 function loadLocalPractitioners() {

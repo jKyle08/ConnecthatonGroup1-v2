@@ -1903,8 +1903,110 @@ function schedulePractitionersReload({ silent = true, delay = 350 } = {}) {
   }, delay);
 }
 
+function deduplicatePractitionersList(practitioners) {
+  if (!Array.isArray(practitioners) || !practitioners.length) return [];
+  const groups = new Map();
+  for (const p of practitioners) {
+    let key = null;
+    if (p.prcId && p.prcId !== '-' && p.prcId.trim()) {
+      key = `prc:${p.prcId.trim().toLowerCase()}`;
+    } else if (p.localCode && p.localCode !== '-' && p.localCode.trim()) {
+      key = `local:${p.localCode.trim().toLowerCase()}`;
+    } else {
+      const name = `${p.givenName || ''} ${p.familyName || ''}`.trim().toLowerCase();
+      if (name) {
+        key = `name:${name}`;
+      } else if (p.fhirId) {
+        key = `fhir:${p.fhirId}`;
+      } else if (p.id) {
+        key = `id:${p.id}`;
+      }
+    }
+    if (!key) key = `anon:${Math.random()}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+
+  const results = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      results.push(list[0]);
+      continue;
+    }
+    const golden = list.find((p) => p.isGolden);
+    if (golden) {
+      results.push(golden);
+      continue;
+    }
+    const nonSource = list.filter((p) => !p.isMdmSource);
+    const pool = nonSource.length ? nonSource : list;
+    pool.sort((a, b) => {
+      const tb = Date.parse(b.updatedAt || b.createdAt || b.syncedAt || '') || 0;
+      const ta = Date.parse(a.updatedAt || a.createdAt || a.syncedAt || '') || 0;
+      if (tb !== ta) return tb - ta;
+      return (Number(b.fhirId) || 0) - (Number(a.fhirId) || 0);
+    });
+    results.push(pool[0]);
+  }
+  return results;
+}
+
+function deduplicatePractitionerRolesList(roles) {
+  if (!Array.isArray(roles) || !roles.length) return [];
+  const groups = new Map();
+  for (const r of roles) {
+    let key = null;
+    const pracKey =
+      (r.practitionerFhirId && `prac:${r.practitionerFhirId}`) ||
+      (r.prcId && r.prcId !== '-' && `prc:${r.prcId.trim().toLowerCase()}`) ||
+      (r.practitionerName && `name:${r.practitionerName.trim().toLowerCase()}`) ||
+      (r.fhirId && `role:${r.fhirId}`) ||
+      null;
+
+    const orgKey = r.organizationFhirId || r.organizationName || '';
+    const codeKey = r.roleCode || r.roleDisplay || '';
+
+    if (pracKey) {
+      key = `${pracKey}|${orgKey}|${codeKey}`;
+    } else if (r.fhirId) {
+      key = `fhir:${r.fhirId}`;
+    } else {
+      key = `id:${r.id || Math.random()}`;
+    }
+
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+
+  const results = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      results.push(list[0]);
+      continue;
+    }
+    const golden = list.find((r) => r.isGolden);
+    if (golden) {
+      results.push(golden);
+      continue;
+    }
+    const active = list.filter((r) => r.active !== false);
+    const candidateList = active.length ? active : list;
+    const nonSource = candidateList.filter((r) => !r.isMdmSource);
+    const pool = nonSource.length ? nonSource : candidateList;
+    pool.sort((a, b) => {
+      const tb = Date.parse(b.updatedAt || b.createdAt || b.syncedAt || '') || 0;
+      const ta = Date.parse(a.updatedAt || a.createdAt || a.syncedAt || '') || 0;
+      if (tb !== ta) return tb - ta;
+      return (Number(b.fhirId) || 0) - (Number(a.fhirId) || 0);
+    });
+    results.push(pool[0]);
+  }
+  return results;
+}
+
 function applyPractitionersData(data) {
-  const sorted = sortPractitionersNewestFirst(data.practitioners || []);
+  const deduplicated = deduplicatePractitionersList(data.practitioners || []);
+  const sorted = sortPractitionersNewestFirst(deduplicated);
   state.practitioners.items = sorted;
   state.practitioners.source = data.source || 'fhir';
   state.practitioners.warning = data.warning || null;
@@ -1952,10 +2054,14 @@ function renderPractitionersTable() {
       const name = [p.prefix, p.givenName, p.familyName].filter(Boolean).join(' ') || '-';
       const roleText = p.roleDisplay || p.roleCode || 'Doctor';
       const facilityText = p.organizationName || p.organizationFhirId || '-';
+      const isGolden = Boolean(p.isGolden);
+      const goldenBadge = isGolden
+        ? `<span class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:11px;font-weight:600;padding:1px 6px;border-radius:10px;margin-left:5px;" title="MDM Golden Master Record">🌟 Golden</span>`
+        : '';
       return `<tr>
           <td><span class="cell-truncate" title="${escapeHtml(fhirId)}">${escapeHtml(fhirId)}</span></td>
           <td>
-            <strong class="cell-ellipsis" title="${escapeHtml(name)}">${escapeHtml(name)}</strong>
+            <strong class="cell-ellipsis" title="${escapeHtml(name)}">${escapeHtml(name)}</strong>${goldenBadge}
             <small class="muted" style="display:block; font-size:12px;">${escapeHtml(p.gender ? (p.gender[0].toUpperCase() + p.gender.slice(1)) : '')}</small>
           </td>
           <td><span class="code-badge">${escapeHtml(p.prcId || '-')}</span></td>
@@ -2133,7 +2239,8 @@ function schedulePractitionerRolesReload({ silent = true, delay = 350 } = {}) {
 }
 
 function applyPractitionerRolesData(data) {
-  const sorted = sortPractitionerRolesNewestFirst(data.roles || []);
+  const deduplicated = deduplicatePractitionerRolesList(data.roles || []);
+  const sorted = sortPractitionerRolesNewestFirst(deduplicated);
   state.practitionerRoles.items = sorted;
   state.practitionerRoles.source = data.source || 'fhir';
   state.practitionerRoles.warning = data.warning || null;
@@ -2187,9 +2294,13 @@ function renderPractitionerRolesTable() {
       const organization = r.organizationName || r.organizationFhirId || '-';
       const roleLabel = r.roleDisplay || r.roleCode || '-';
       const isActive = r.active !== false;
+      const isGolden = Boolean(r.isGolden);
+      const goldenBadge = isGolden
+        ? `<span class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:11px;font-weight:600;padding:1px 6px;border-radius:10px;margin-left:5px;" title="MDM Golden Master Record">🌟 Golden</span>`
+        : '';
       return `<tr>
           <td><span class="cell-truncate" title="${escapeHtml(fhirId)}">${escapeHtml(fhirId)}</span></td>
-          <td><span class="cell-ellipsis" title="${escapeHtml(practitioner)}">${escapeHtml(practitioner)}</span></td>
+          <td><span class="cell-ellipsis" title="${escapeHtml(practitioner)}">${escapeHtml(practitioner)}</span>${goldenBadge}</td>
           <td><span class="cell-ellipsis" title="${escapeHtml(organization)}">${escapeHtml(organization)}</span></td>
           <td><span class="role-badge" title="${escapeHtml(roleLabel)}">${escapeHtml(roleLabel)}</span></td>
           <td>

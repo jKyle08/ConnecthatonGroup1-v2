@@ -10,6 +10,7 @@ const {
   summarizeCondition,
   deleteResource,
   fetchPatientHistory,
+  deduplicatePatients,
 } = require('./fhir');
 const { logActivity } = require('./activity');
 
@@ -295,7 +296,7 @@ function mergeFhirWithLocal(fhirPatients, localPatients) {
     .filter((local) => !usedLocalIds.has(local.id))
     .map((local) => ({ ...local, source: local.fhirId ? 'fhir' : 'local' }));
 
-  return sortPatientsNewestFirst([...localOnly, ...merged]);
+  return sortPatientsNewestFirst(deduplicatePatients([...localOnly, ...merged]));
 }
 
 function loadLocalPatients() {

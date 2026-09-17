@@ -229,17 +229,33 @@ function isMdmError(err) {
   );
 }
 
-function isMdmManagedResource(resource) {
+function isMdmGoldenRecord(resource) {
   const tags = resource?.meta?.tag || [];
   return tags.some((tag) => {
     const system = String(tag.system || '').toLowerCase();
     const code = String(tag.code || '').toUpperCase();
     if (system.includes('managing-mdm-system') && code === 'HAPI-MDM') return true;
-    if (system.includes('mdm-record-status')) {
+    if (system.includes('mdm-record-status') || system.includes('mdm')) {
       return code === 'GOLD' || code === 'GOLDEN' || code === 'GOLDEN_RECORD';
+    }
+    return code === 'GOLD' || code === 'GOLDEN' || code === 'GOLDEN_RECORD';
+  });
+}
+
+function isMdmSourceRecord(resource) {
+  const tags = resource?.meta?.tag || [];
+  return tags.some((tag) => {
+    const system = String(tag.system || '').toLowerCase();
+    const code = String(tag.code || '').toUpperCase();
+    if (system.includes('mdm-record-status')) {
+      return code !== 'GOLD' && code !== 'GOLDEN' && code !== 'GOLDEN_RECORD';
     }
     return false;
   });
+}
+
+function isMdmManagedResource(resource) {
+  return isMdmGoldenRecord(resource);
 }
 
 async function getResourceRaw(resourceType, fhirId) {
@@ -458,6 +474,52 @@ function codingFromExt(extensions, url) {
   return ext?.valueCoding || null;
 }
 
+function deduplicatePatients(patients) {
+  if (!Array.isArray(patients) || !patients.length) return [];
+  const groups = new Map();
+  for (const p of patients) {
+    let key = null;
+    if (p.philsysId && p.philsysId !== '-' && p.philsysId.trim()) {
+      key = `philsys:${p.philsysId.trim().toLowerCase()}`;
+    } else if (p.philhealthId && p.philhealthId !== '-' && p.philhealthId.trim()) {
+      key = `philhealth:${p.philhealthId.trim().toLowerCase()}`;
+    } else if (p.localCode && p.localCode !== '-' && p.localCode.trim()) {
+      key = `local:${p.localCode.trim().toLowerCase()}`;
+    } else {
+      const name = `${p.givenName1 || ''} ${p.familyName || ''}`.trim().toLowerCase();
+      if (name && p.birthDate) {
+        key = `name-dob:${name}|${p.birthDate}`;
+      } else if (name) {
+        key = `name:${name}`;
+      } else if (p.fhirId) {
+        key = `fhir:${p.fhirId}`;
+      }
+    }
+    if (!key) key = `anon:${Math.random()}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+
+  const results = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      results.push(list[0]);
+      continue;
+    }
+    // Prefer non-golden source records
+    const nonGolden = list.filter((p) => !p.isGolden);
+    const pool = nonGolden.length ? nonGolden : list;
+    pool.sort((a, b) => {
+      const tb = Date.parse(b.updatedAt || b.createdAt || b.syncedAt || '') || 0;
+      const ta = Date.parse(a.updatedAt || a.createdAt || a.syncedAt || '') || 0;
+      if (tb !== ta) return tb - ta;
+      return (Number(b.fhirId) || 0) - (Number(a.fhirId) || 0);
+    });
+    results.push(pool[0]);
+  }
+  return results;
+}
+
 function mapFhirPatient(resource) {
   const name = resource.name?.[0] || {};
   const given = name.given || [];
@@ -466,6 +528,8 @@ function mapFhirPatient(resource) {
   const province = codingFromExt(address.extension, 'https://fhir.doh.gov.ph/phcore/StructureDefinition/province');
   const city = codingFromExt(address.extension, 'https://fhir.doh.gov.ph/phcore/StructureDefinition/city-municipality');
   const barangay = codingFromExt(address.extension, 'https://fhir.doh.gov.ph/phcore/StructureDefinition/barangay');
+  const isGolden = isMdmGoldenRecord(resource);
+  const isSource = isMdmSourceRecord(resource);
 
   return {
     id: null,
@@ -499,6 +563,9 @@ function mapFhirPatient(resource) {
     nextOfKinFamily: resource.contact?.[0]?.name?.family || null,
     nextOfKinGiven: resource.contact?.[0]?.name?.given?.[0] || null,
     fhirId: resource.id || null,
+    isGolden,
+    isMdmSource: isSource,
+    mdmStatus: isGolden ? 'GOLD' : isSource ? 'SOURCE' : null,
     syncStatus: 'synced',
     syncError: null,
     syncedAt: resource.meta?.lastUpdated || null,
@@ -600,8 +667,10 @@ async function searchPatients({ count = 200, q, all = true, maxPages = 100 } = {
 
   let patients = entries
     .map((e) => e.resource)
-    .filter((r) => r && r.resourceType === 'Patient')
+    .filter((r) => r && r.resourceType === 'Patient' && !isMdmGoldenRecord(r))
     .map(mapFhirPatient);
+
+  patients = deduplicatePatients(patients);
 
   if (q) {
     const filtered = patients.filter((p) => matchesQuery(p, q));
@@ -617,12 +686,51 @@ async function searchPatients({ count = 200, q, all = true, maxPages = 100 } = {
   return patients;
 }
 
+function deduplicateOrganizations(organizations) {
+  if (!Array.isArray(organizations) || !organizations.length) return [];
+  const groups = new Map();
+  for (const o of organizations) {
+    let key = null;
+    if (o.nhfrCode && o.nhfrCode !== '-' && o.nhfrCode.trim()) {
+      key = `nhfr:${o.nhfrCode.trim().toLowerCase()}`;
+    } else if (o.name && o.name !== '-' && o.name.trim()) {
+      key = `name:${o.name.trim().toLowerCase()}`;
+    } else if (o.fhirId) {
+      key = `fhir:${o.fhirId}`;
+    }
+    if (!key) key = `anon:${Math.random()}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(o);
+  }
+
+  const results = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      results.push(list[0]);
+      continue;
+    }
+    // Prefer non-golden source records
+    const nonGolden = list.filter((o) => !o.isGolden);
+    const pool = nonGolden.length ? nonGolden : list;
+    pool.sort((a, b) => {
+      const tb = Date.parse(b.updatedAt || b.createdAt || b.syncedAt || '') || 0;
+      const ta = Date.parse(a.updatedAt || a.createdAt || a.syncedAt || '') || 0;
+      if (tb !== ta) return tb - ta;
+      return (Number(b.fhirId) || 0) - (Number(a.fhirId) || 0);
+    });
+    results.push(pool[0]);
+  }
+  return results;
+}
+
 function mapFhirOrganization(resource) {
   const address = resource.address?.[0] || {};
   const region = codingFromExt(address.extension, 'https://fhir.doh.gov.ph/phcore/StructureDefinition/region');
   const province = codingFromExt(address.extension, 'https://fhir.doh.gov.ph/phcore/StructureDefinition/province');
   const city = codingFromExt(address.extension, 'https://fhir.doh.gov.ph/phcore/StructureDefinition/city-municipality');
   const barangay = codingFromExt(address.extension, 'https://fhir.doh.gov.ph/phcore/StructureDefinition/barangay');
+  const isGolden = isMdmGoldenRecord(resource);
+  const isSource = isMdmSourceRecord(resource);
 
   return {
     id: null,
@@ -643,6 +751,9 @@ function mapFhirOrganization(resource) {
     barangayDisplay: barangay?.display || null,
     postalCode: address.postalCode || null,
     fhirId: resource.id || null,
+    isGolden,
+    isMdmSource: isSource,
+    mdmStatus: isGolden ? 'GOLD' : isSource ? 'SOURCE' : null,
     syncStatus: 'synced',
     syncError: null,
     syncedAt: resource.meta?.lastUpdated || null,
@@ -780,8 +891,10 @@ async function searchOrganizations({ count = 200, q, all = true, maxPages = 100 
 
   let organizations = entries
     .map((e) => e.resource)
-    .filter((r) => r && r.resourceType === 'Organization')
+    .filter((r) => r && r.resourceType === 'Organization' && !isMdmGoldenRecord(r))
     .map(mapFhirOrganization);
+
+  organizations = deduplicateOrganizations(organizations);
 
   if (q) {
     const filtered = organizations.filter((o) => matchesOrgQuery(o, q));
@@ -796,10 +909,119 @@ async function searchOrganizations({ count = 200, q, all = true, maxPages = 100 
   return organizations;
 }
 
+function deduplicatePractitioners(practitioners) {
+  if (!Array.isArray(practitioners) || !practitioners.length) return [];
+  const groups = new Map();
+
+  for (const p of practitioners) {
+    let key = null;
+    if (p.prcId && p.prcId !== '-' && p.prcId.trim()) {
+      key = `prc:${p.prcId.trim().toLowerCase()}`;
+    } else if (p.localCode && p.localCode !== '-' && p.localCode.trim()) {
+      key = `local:${p.localCode.trim().toLowerCase()}`;
+    } else {
+      const name = `${p.givenName || ''} ${p.familyName || ''}`.trim().toLowerCase();
+      if (name) {
+        key = `name:${name}`;
+      } else if (p.fhirId) {
+        key = `fhir:${p.fhirId}`;
+      } else if (p.id) {
+        key = `id:${p.id}`;
+      }
+    }
+
+    if (!key) {
+      key = `anon:${Math.random()}`;
+    }
+
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(p);
+  }
+
+  const results = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      results.push(list[0]);
+      continue;
+    }
+    // Prefer non-golden source records
+    const nonGolden = list.filter((p) => !p.isGolden);
+    const pool = nonGolden.length ? nonGolden : list;
+
+    pool.sort((a, b) => {
+      const tb = Date.parse(b.updatedAt || b.createdAt || b.syncedAt || '') || 0;
+      const ta = Date.parse(a.updatedAt || a.createdAt || a.syncedAt || '') || 0;
+      if (tb !== ta) return tb - ta;
+      return (Number(b.fhirId) || 0) - (Number(a.fhirId) || 0);
+    });
+    results.push(pool[0]);
+  }
+
+  return results;
+}
+
+function deduplicatePractitionerRoles(roles) {
+  if (!Array.isArray(roles) || !roles.length) return [];
+  const groups = new Map();
+
+  for (const r of roles) {
+    let key = null;
+    const pracKey =
+      (r.practitionerFhirId && `prac:${r.practitionerFhirId}`) ||
+      (r.prcId && r.prcId !== '-' && `prc:${r.prcId.trim().toLowerCase()}`) ||
+      (r.practitionerName && `name:${r.practitionerName.trim().toLowerCase()}`) ||
+      (r.fhirId && `role:${r.fhirId}`) ||
+      null;
+
+    const orgKey = r.organizationFhirId || r.organizationName || '';
+    const codeKey = r.roleCode || r.roleDisplay || '';
+
+    if (pracKey) {
+      key = `${pracKey}|${orgKey}|${codeKey}`;
+    } else if (r.fhirId) {
+      key = `fhir:${r.fhirId}`;
+    } else {
+      key = `id:${r.id || Math.random()}`;
+    }
+
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(r);
+  }
+
+  const results = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      results.push(list[0]);
+      continue;
+    }
+    // Prefer non-golden source records
+    const nonGolden = list.filter((r) => !r.isGolden);
+    const candidateList = nonGolden.length ? nonGolden : list;
+    const active = candidateList.filter((r) => r.active !== false);
+    const pool = active.length ? active : candidateList;
+
+    pool.sort((a, b) => {
+      const tb = Date.parse(b.updatedAt || b.createdAt || b.syncedAt || '') || 0;
+      const ta = Date.parse(a.updatedAt || a.createdAt || a.syncedAt || '') || 0;
+      if (tb !== ta) return tb - ta;
+      return (Number(b.fhirId) || 0) - (Number(a.fhirId) || 0);
+    });
+    results.push(pool[0]);
+  }
+
+  return results;
+}
+
 function mapFhirPractitioner(resource) {
   const name = resource.name?.[0] || {};
   const given = name.given || [];
   const prefix = name.prefix || [];
+  const isGolden = isMdmGoldenRecord(resource);
+  const isSource = isMdmSourceRecord(resource);
   return {
     id: null,
     localCode: '-',
@@ -811,6 +1033,9 @@ function mapFhirPractitioner(resource) {
     phone: resource.telecom?.find((t) => t.system === 'phone')?.value || null,
     gender: resource.gender || null,
     fhirId: resource.id || null,
+    isGolden,
+    isMdmSource: isSource,
+    mdmStatus: isGolden ? 'GOLD' : isSource ? 'SOURCE' : null,
     syncStatus: 'synced',
     syncError: null,
     syncedAt: resource.meta?.lastUpdated || null,
@@ -918,8 +1143,10 @@ async function searchPractitioners({ count = 200, q, all = true, maxPages = 100 
 
   let practitioners = entries
     .map((e) => e.resource)
-    .filter((r) => r && r.resourceType === 'Practitioner')
+    .filter((r) => r && r.resourceType === 'Practitioner' && !isMdmGoldenRecord(r))
     .map(mapFhirPractitioner);
+
+  practitioners = deduplicatePractitioners(practitioners);
 
   if (q) {
     const filtered = practitioners.filter((p) => matchesPractitionerQuery(p, q));
@@ -948,6 +1175,8 @@ function mapFhirPractitionerRole(resource, practitionerResource = null) {
   const prac = practitionerResource ? mapFhirPractitioner(practitionerResource) : null;
   const active =
     typeof resource.active === 'boolean' ? resource.active : resource.active !== false;
+  const isGolden = isMdmGoldenRecord(resource) || Boolean(prac?.isGolden);
+  const isSource = isMdmSourceRecord(resource);
   return {
     id: null,
     localCode: '-',
@@ -974,6 +1203,9 @@ function mapFhirPractitionerRole(resource, practitionerResource = null) {
       ? `${prac.prefix ? `${prac.prefix} ` : ''}${prac.givenName || ''} ${prac.familyName || ''}`.trim()
       : null,
     fhirId: resource.id || null,
+    isGolden,
+    isMdmSource: isSource,
+    mdmStatus: isGolden ? 'GOLD' : isSource ? 'SOURCE' : null,
     syncStatus: 'synced',
     syncError: null,
     syncedAt: resource.meta?.lastUpdated || null,
@@ -1242,7 +1474,7 @@ async function searchPractitionerRoles({
 
   let roles = entries
     .map((e) => e.resource)
-    .filter((r) => r && r.resourceType === 'PractitionerRole')
+    .filter((r) => r && r.resourceType === 'PractitionerRole' && !isMdmGoldenRecord(r))
     .map((roleResource) => mapFhirPractitionerRole(roleResource));
 
   if (q && !practitionerFhirId) {
@@ -1277,6 +1509,7 @@ async function searchPractitionerRoles({
         practitionerName:
           `${prac.prefix ? `${prac.prefix} ` : ''}${prac.givenName || ''} ${prac.familyName || ''}`.trim() ||
           role.practitionerName,
+        isGolden: role.isGolden || Boolean(prac.isGolden),
       };
     });
   }
@@ -1305,6 +1538,8 @@ async function searchPractitionerRoles({
       };
     });
   }
+
+  roles = deduplicatePractitionerRoles(roles);
 
   return roles;
 }
@@ -3100,4 +3335,10 @@ module.exports = {
   getResourceByReference,
   refId,
   deleteResource,
+  deduplicatePatients,
+  deduplicateOrganizations,
+  deduplicatePractitioners,
+  deduplicatePractitionerRoles,
+  isMdmGoldenRecord,
+  isMdmSourceRecord,
 };

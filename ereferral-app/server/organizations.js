@@ -6,6 +6,7 @@ const {
   getOrganization,
   searchOrganizations,
   deleteResource,
+  deduplicateOrganizations,
 } = require('./fhir');
 const { logActivity } = require('./activity');
 
@@ -137,7 +138,7 @@ function mergeOrgsWithLocal(fhirOrganizations, localOrganizations) {
     .filter((local) => !usedLocalIds.has(local.id))
     .map((local) => ({ ...local, source: local.fhirId ? 'fhir' : 'local' }));
 
-  return sortOrganizationsNewestFirst([...localOnly, ...merged]);
+  return sortOrganizationsNewestFirst(deduplicateOrganizations([...localOnly, ...merged]));
 }
 
 function loadLocalOrganizations() {
