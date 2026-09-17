@@ -27,6 +27,9 @@ const REQUISITION_SYSTEM = 'urn:oid:1.2.840.113619.21.1.2';
 const SNOMED_SYSTEM = 'http://snomed.info/sct';
 const DEFAULT_ROLE_CODE = '158965000';
 const DEFAULT_ROLE_DISPLAY = 'Doctor';
+const TASK_CODE_PATIENT_REFERRAL = `${SNOMED_SYSTEM}|3457005`;
+const TASK_CODE_FULFILL = 'http://hl7.org/fhir/CodeSystem/task-code|fulfill';
+const REFERRAL_TASK_CODES = [TASK_CODE_PATIENT_REFERRAL, TASK_CODE_FULFILL];
 
 /**
  * CDR also checks experimental PSGC|2Q-2026 when only Coding.version is set,
@@ -517,7 +520,26 @@ function deduplicatePatients(patients) {
     });
     results.push(pool[0]);
   }
-  return results;
+  return collapseGoldenNameDuplicates(results);
+}
+
+function personNameDob(p) {
+  const name = `${p.givenName1 || ''} ${p.familyName || ''}`.trim().toLowerCase();
+  if (!name) return null;
+  return p.birthDate ? `${name}|${p.birthDate}` : name;
+}
+
+function collapseGoldenNameDuplicates(patients) {
+  const sources = patients.filter((p) => !p.isGolden);
+  const goldens = patients.filter((p) => p.isGolden);
+  if (!goldens.length) return patients;
+
+  const sourceKeys = new Set(sources.map(personNameDob).filter(Boolean));
+  const keptGoldens = goldens.filter((g) => {
+    const key = personNameDob(g);
+    return !key || !sourceKeys.has(key);
+  });
+  return [...keptGoldens, ...sources];
 }
 
 function mapFhirPatient(resource) {
@@ -597,25 +619,50 @@ async function fetchFhirBundlePages(startUrl, { maxPages = 5, maxEntries = 300 }
   const entries = [];
   let nextUrl = startUrl;
   let pages = 0;
+  let lastErr = null;
 
   while (nextUrl && pages < maxPages && entries.length < maxEntries) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-      const res = await fetch(nextUrl, {
-        headers: { Accept: 'application/fhir+json' },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      const json = await parseFhirResponse(res);
-      pages += 1;
-      for (const entry of json?.entry || []) {
-        if (entry?.resource) entries.push(entry);
+    let pageOk = false;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
+        const res = await fetch(nextUrl, {
+          headers: { Accept: 'application/fhir+json' },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        const json = await parseFhirResponse(res);
+        pages += 1;
+        for (const entry of json?.entry || []) {
+          if (entry?.resource) entries.push(entry);
+        }
+        const next = (json?.link || []).find((l) => l.relation === 'next');
+        nextUrl = next?.url || null;
+        pageOk = true;
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        console.warn(
+          `fetchFhirBundlePages page ${pages + 1} attempt ${attempt} failed:`,
+          err.message
+        );
+        if (attempt < 3) {
+          await new Promise((r) => setTimeout(r, 400 * attempt));
+        }
       }
-      const next = (json?.link || []).find((l) => l.relation === 'next');
-      nextUrl = next?.url || null;
-    } catch (err) {
-      console.warn('fetchFhirBundlePages page fetch warning:', err.message);
+    }
+    if (!pageOk) {
+      // First page failed completely — surface the error so callers don't treat as empty.
+      if (pages === 0) {
+        const err = new Error(
+          `FHIR search failed: ${lastErr?.message || 'fetch failed'}`
+        );
+        err.status = 502;
+        throw err;
+      }
+      console.warn('fetchFhirBundlePages stopping after partial results:', lastErr?.message);
       break;
     }
   }
@@ -642,7 +689,9 @@ async function countFhirResources(resourceType) {
 }
 
 async function searchPatients({ count = 200, q, all = true, maxPages = 100 } = {}) {
-  const pageSize = Math.min(500, Math.max(1, Number(count) || 200));
+  const requested = Math.min(500, Math.max(1, Number(count) || 200));
+  // Smaller pages return newest records faster; HAPI 200-row sorts often exceed 8-10s.
+  const pageSize = Math.min(50, requested);
   const params = new URLSearchParams({
     _count: String(pageSize),
     _sort: '-_lastUpdated',
@@ -658,7 +707,10 @@ async function searchPatients({ count = 200, q, all = true, maxPages = 100 } = {
 
   const startUrl = `${FHIR_BASE_URL}/Patient?${params}`;
   const entries = all
-    ? await fetchFhirBundlePages(startUrl, { maxPages })
+    ? await fetchFhirBundlePages(startUrl, {
+        maxPages,
+        maxEntries: Math.max(requested, 200),
+      })
     : (
         await parseFhirResponse(
           await fetch(startUrl, { headers: { Accept: 'application/fhir+json' } })
@@ -667,9 +719,10 @@ async function searchPatients({ count = 200, q, all = true, maxPages = 100 } = {
 
   let patients = entries
     .map((e) => e.resource)
-    .filter((r) => r && r.resourceType === 'Patient' && !isMdmGoldenRecord(r))
+    .filter((r) => r && r.resourceType === 'Patient')
     .map(mapFhirPatient);
 
+  // Keep goldens when the source is not in this page; prefer source when both exist.
   patients = deduplicatePatients(patients);
 
   if (q) {
@@ -2195,52 +2248,20 @@ function buildReferralBundle({
     ? priorityRaw
     : 'routine';
 
-  // Team format: reasonCode = chief complaint + diagnosis coding
+  // reasonCode must only use Reason for Referral (Service Type) VS codes.
+  // CDR rejects chief-complaint / ICD here; those stay on Condition + reasonReference.
   const reasonCodeEntries = [
     {
-      text: reasonNarrative,
       coding: [
         {
           system: SNOMED_SYSTEM,
-          code: '422843007',
-          display: 'Chief complaint',
+          code: reasonServiceCode,
+          display: reasonAllowed[reasonServiceCode],
         },
       ],
+      text: reasonNarrative || data.reasonDisplay || reasonAllowed[reasonServiceCode],
     },
   ];
-  if (data.workingImpressionIcdCode || data.icdCode) {
-    reasonCodeEntries.push({
-      coding: [
-        {
-          system: 'http://hl7.org/fhir/sid/icd-10',
-          code: data.workingImpressionIcdCode || data.icdCode,
-          display:
-            data.workingImpressionIcdDisplay || data.icdDisplay || impressionText,
-        },
-      ],
-    });
-  } else if (data.workingImpressionCode) {
-    reasonCodeEntries.push({
-      coding: [
-        {
-          system: data.workingImpressionSystem || SNOMED_SYSTEM,
-          code: data.workingImpressionCode,
-          display: data.workingImpressionDisplay || impressionText,
-        },
-      ],
-      text: impressionText,
-    });
-  }
-  reasonCodeEntries.push({
-    coding: [
-      {
-        system: SNOMED_SYSTEM,
-        code: reasonServiceCode,
-        display: reasonAllowed[reasonServiceCode],
-      },
-    ],
-    text: data.reasonDisplay || reasonAllowed[reasonServiceCode],
-  });
 
   const serviceRequestPerformer = [];
   if (receivingOrgFhirId) {
@@ -2488,6 +2509,20 @@ function humanName(resource) {
   return full || null;
 }
 
+/** Prefer Organization among ServiceRequest.performer refs (interop / incomplete Tasks). */
+function pickServiceRequestPerformerRef(serviceRequest) {
+  const list = Array.isArray(serviceRequest?.performer)
+    ? serviceRequest.performer
+    : serviceRequest?.performer
+      ? [serviceRequest.performer]
+      : [];
+  if (!list.length) return null;
+  const orgRef = list.find((p) =>
+    /^Organization\//i.test(String(p?.reference || '').replace(/^\//, ''))
+  );
+  return orgRef || list[0] || null;
+}
+
 function indexFhirBundleEntries(entries) {
   const byRef = new Map();
   for (const entry of entries || []) {
@@ -2512,30 +2547,26 @@ function lookupRef(byRef, reference) {
   return byRef.get(value) || null;
 }
 
-async function searchTasks({
-  count = 100,
-  status = 'requested,accepted,rejected,in-progress,received,on-hold,completed',
-  owner,
-  patient,
-  all = true,
-  maxPages = 50,
-  includeRelated = false,
-} = {}) {
-  const pageSize = Math.min(200, Math.max(1, Number(count) || 100));
+async function searchServiceRequestsByPerformer(
+  performer,
+  { count = 50, all = true, maxPages = 10, includeRelated = true } = {}
+) {
+  const pageSize = Math.min(100, Math.max(1, Number(count) || 50));
+  const performerRef = String(performer || '').trim();
+  if (!performerRef) return { serviceRequests: [], byRef: new Map() };
+
+  const normalized = /^(Organization|PractitionerRole)\//i.test(performerRef)
+    ? performerRef
+    : `Organization/${performerRef}`;
+
   const params = new URLSearchParams({
     _count: String(pageSize),
     _sort: '-_lastUpdated',
+    performer: normalized,
   });
-  params.set('code', `${SNOMED_SYSTEM}|3457005`);
-  if (status) params.set('status', status);
-  if (owner) params.set('owner', owner);
-  if (patient) params.set('patient', patient.startsWith('Patient/') ? patient : `Patient/${patient}`);
   if (includeRelated) {
     [
-      'Task:patient',
-      'Task:focus',
-      'Task:owner',
-      'Task:requester',
+      'ServiceRequest:subject',
       'ServiceRequest:requester',
       'ServiceRequest:performer',
     ].forEach((inc) => params.append('_include', inc));
@@ -2544,7 +2575,7 @@ async function searchTasks({
     );
   }
 
-  const startUrl = `${FHIR_BASE_URL}/Task?${params}`;
+  const startUrl = `${FHIR_BASE_URL}/ServiceRequest?${params}`;
   const entries = all
     ? await fetchFhirBundlePages(startUrl, { maxPages })
     : (
@@ -2553,18 +2584,251 @@ async function searchTasks({
         )
       )?.entry || [];
 
+  const serviceRequests = entries
+    .map((e) => e.resource)
+    .filter((r) => r && r.resourceType === 'ServiceRequest');
+  return {
+    serviceRequests,
+    byRef: indexFhirBundleEntries(entries),
+  };
+}
+
+function summarizeIncomingFromServiceRequest(sr, byRef = new Map()) {
+  const patient = lookupRef(byRef, sr?.subject);
+  const srRequester = sr?.requester || null;
+  const srPerformer = pickServiceRequestPerformerRef(sr);
+  const srRequesterRes = lookupRef(byRef, srRequester);
+  const srPerformerRes = lookupRef(byRef, srPerformer);
+
+  const srRequesterOrg =
+    srRequesterRes?.resourceType === 'Organization'
+      ? srRequesterRes
+      : lookupRef(byRef, srRequesterRes?.organization);
+  const srPerformerOrg =
+    srPerformerRes?.resourceType === 'Organization'
+      ? srPerformerRes
+      : lookupRef(byRef, srPerformerRes?.organization);
+
+  const category = sr?.category?.[0];
+  const reason = sr?.reasonCode?.[0];
+  const requisition =
+    sr?.requisition?.value || `SR-${sr?.id || crypto.randomUUID().slice(0, 8)}`;
+
+  // No Task yet — treat active ServiceRequest as inbound requested.
+  const srStatus = String(sr?.status || 'active').toLowerCase();
+  const taskStatus =
+    srStatus === 'completed' || srStatus === 'revoked' || srStatus === 'entered-in-error'
+      ? srStatus === 'revoked' || srStatus === 'entered-in-error'
+        ? 'rejected'
+        : 'completed'
+      : 'requested';
+
+  return {
+    taskFhirId: null,
+    taskStatus,
+    serviceRequestFhirId: sr?.id || null,
+    encounterFhirId: refId(sr?.encounter),
+    patientFhirId: patient?.id || refId(sr?.subject) || null,
+    patientName:
+      humanName(patient) ||
+      refDisplay(sr?.subject) ||
+      'Unknown patient',
+    sendingOrgFhirId:
+      srRequesterOrg?.id ||
+      refId(srRequesterRes?.organization) ||
+      (srRequesterRes?.resourceType === 'Organization' ? srRequesterRes.id : null) ||
+      (/^Organization\//i.test(String(srRequester?.reference || ''))
+        ? refId(srRequester)
+        : null) ||
+      null,
+    sendingOrgName:
+      srRequesterOrg?.name ||
+      refDisplay(srRequesterRes?.organization) ||
+      refDisplay(srRequester) ||
+      null,
+    receivingOrgFhirId:
+      srPerformerOrg?.id ||
+      (srPerformerRes?.resourceType === 'Organization' ? srPerformerRes.id : null) ||
+      (/^Organization\//i.test(String(srPerformer?.reference || ''))
+        ? refId(srPerformer)
+        : null) ||
+      refId(srPerformerRes?.organization) ||
+      null,
+    receivingOrgName:
+      srPerformerOrg?.name ||
+      refDisplay(srPerformer) ||
+      null,
+    sendingPracFhirId:
+      refId(srRequesterRes?.practitioner) ||
+      (srRequesterRes?.resourceType === 'Practitioner' ? srRequesterRes.id : null),
+    sendingPracName: humanName(
+      srRequesterRes?.resourceType === 'Practitioner' ? srRequesterRes : null
+    ),
+    receivingPracFhirId:
+      refId(srPerformerRes?.practitioner) ||
+      (srPerformerRes?.resourceType === 'Practitioner' ? srPerformerRes.id : null),
+    receivingPracName: humanName(
+      srPerformerRes?.resourceType === 'Practitioner' ? srPerformerRes : null
+    ),
+    categoryCode: category?.coding?.[0]?.code || null,
+    categoryDisplay: category?.coding?.[0]?.display || null,
+    categoryText: category?.text || category?.coding?.[0]?.display || null,
+    reasonCode: reason?.coding?.[0]?.code || null,
+    reasonDisplay: reason?.coding?.[0]?.display || null,
+    reasonText: reason?.text || reason?.coding?.[0]?.display || null,
+    referralNote: sr?.note?.[0]?.text || null,
+    taskNote: null,
+    requisitionValue: requisition,
+    dateOfReferral: sr?.authoredOn || sr?.meta?.lastUpdated || null,
+    createdAt: sr?.meta?.lastUpdated || null,
+    ownerRoleFhirId:
+      srPerformerRes?.resourceType === 'PractitionerRole' ? srPerformerRes.id : null,
+    requesterRoleFhirId:
+      srRequesterRes?.resourceType === 'PractitionerRole' ? srRequesterRes.id : null,
+    missingTask: true,
+  };
+}
+
+/**
+ * Interop: some senders POST ServiceRequest to our Organization without a Task.
+ * Incoming must still list those.
+ */
+async function findInboundServiceRequestSummaries(orgFhirId) {
+  const orgId = String(orgFhirId || '').trim();
+  if (!orgId) return [];
+
+  const seen = new Set();
+  const out = [];
+
+  const absorb = async (performerRef) => {
+    try {
+      const { serviceRequests, byRef } = await searchServiceRequestsByPerformer(
+        performerRef,
+        { count: 50, all: true, maxPages: 5, includeRelated: true }
+      );
+      for (const sr of serviceRequests) {
+        const id = String(sr?.id || '');
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        out.push(summarizeIncomingFromServiceRequest(sr, byRef));
+      }
+    } catch (err) {
+      console.warn(
+        'findInboundServiceRequestSummaries performer search failed:',
+        performerRef,
+        err.message
+      );
+    }
+  };
+
+  await absorb(`Organization/${orgId}`);
+
+  try {
+    const roles = await searchPractitionerRoles({
+      organizationFhirId: orgId,
+      count: 50,
+      all: true,
+      maxPages: 3,
+    });
+    for (const role of roles || []) {
+      if (role?.fhirId) await absorb(`PractitionerRole/${role.fhirId}`);
+    }
+  } catch (err) {
+    console.warn('findInboundServiceRequestSummaries role search failed:', err.message);
+  }
+
+  await hydrateIncomingSummaries(out);
+  return out;
+}
+
+async function searchTasks({
+  count = 100,
+  status = 'requested,accepted,rejected,in-progress,received,on-hold,completed',
+  owner,
+  patient,
+  all = true,
+  maxPages = 50,
+  includeRelated = false,
+  codes = REFERRAL_TASK_CODES,
+} = {}) {
+  const pageSize = Math.min(200, Math.max(1, Number(count) || 100));
+  const codeList = Array.isArray(codes) && codes.length ? codes : REFERRAL_TASK_CODES;
+
+  async function searchOneCode(code) {
+    const params = new URLSearchParams({
+      _count: String(pageSize),
+      _sort: '-_lastUpdated',
+    });
+    params.set('code', code);
+    if (status) params.set('status', status);
+    if (owner) params.set('owner', owner);
+    if (patient) {
+      params.set(
+        'patient',
+        patient.startsWith('Patient/') ? patient : `Patient/${patient}`
+      );
+    }
+    if (includeRelated) {
+      [
+        'Task:patient',
+        'Task:focus',
+        'Task:owner',
+        'Task:requester',
+        'ServiceRequest:requester',
+        'ServiceRequest:performer',
+        'ServiceRequest:subject',
+      ].forEach((inc) => params.append('_include', inc));
+      ['PractitionerRole:organization', 'PractitionerRole:practitioner'].forEach((inc) =>
+        params.append('_include:iterate', inc)
+      );
+    }
+
+    const startUrl = `${FHIR_BASE_URL}/Task?${params}`;
+    if (all) return fetchFhirBundlePages(startUrl, { maxPages });
+    const json = await parseFhirResponse(
+      await fetch(startUrl, { headers: { Accept: 'application/fhir+json' } })
+    );
+    return json?.entry || [];
+  }
+
+  const pageSets = await Promise.all(codeList.map((code) => searchOneCode(code)));
+  const entries = [];
+  const seenEntryKeys = new Set();
+  for (const page of pageSets) {
+    for (const entry of page || []) {
+      const res = entry?.resource;
+      const key = res?.resourceType && res?.id
+        ? `${res.resourceType}/${res.id}`
+        : entry?.fullUrl || null;
+      if (key && seenEntryKeys.has(key)) continue;
+      if (key) seenEntryKeys.add(key);
+      entries.push(entry);
+    }
+  }
+
   const tasks = entries
     .map((e) => e.resource)
     .filter((r) => r && r.resourceType === 'Task');
 
-  if (!includeRelated) return tasks;
-  return { tasks, byRef: indexFhirBundleEntries(entries) };
+  // Deduplicate Tasks that appear under both codes.
+  const uniqueTasks = [];
+  const seenTaskIds = new Set();
+  for (const task of tasks) {
+    const id = String(task?.id || '');
+    if (id && seenTaskIds.has(id)) continue;
+    if (id) seenTaskIds.add(id);
+    uniqueTasks.push(task);
+  }
+
+  if (!includeRelated) return uniqueTasks;
+  return { tasks: uniqueTasks, byRef: indexFhirBundleEntries(entries) };
 }
 
 /** List-row summary: uses included bundle resources / reference.display, no nested _resources. */
 function summarizeIncomingTaskList(task, byRef = new Map()) {
-  const patient = lookupRef(byRef, task.for);
   const serviceRequest = lookupRef(byRef, task.focus);
+  const patient =
+    lookupRef(byRef, task.for) || lookupRef(byRef, serviceRequest?.subject);
   const ownerRef = lookupRef(byRef, task.owner);
   const requesterRef = lookupRef(byRef, task.requester);
 
@@ -2574,9 +2838,7 @@ function summarizeIncomingTaskList(task, byRef = new Map()) {
   const requesterRole = requesterIsOrg ? null : requesterRef;
 
   const srRequester = serviceRequest?.requester || null;
-  const srPerformer = Array.isArray(serviceRequest?.performer)
-    ? serviceRequest.performer[0]
-    : serviceRequest?.performer || null;
+  const srPerformer = pickServiceRequestPerformerRef(serviceRequest);
   const srRequesterRes = lookupRef(byRef, srRequester);
   const srPerformerRes = lookupRef(byRef, srPerformer);
 
@@ -2608,12 +2870,20 @@ function summarizeIncomingTaskList(task, byRef = new Map()) {
     taskStatus: task.status || 'requested',
     serviceRequestFhirId: serviceRequest?.id || refId(task.focus),
     encounterFhirId: refId(serviceRequest?.encounter),
-    patientFhirId: patient?.id || refId(task.for),
-    patientName: humanName(patient) || refDisplay(task.for) || 'Unknown patient',
+    patientFhirId:
+      patient?.id || refId(task.for) || refId(serviceRequest?.subject) || null,
+    patientName:
+      humanName(patient) ||
+      refDisplay(task.for) ||
+      refDisplay(serviceRequest?.subject) ||
+      'Unknown patient',
     sendingOrgFhirId:
       sendingOrg?.id ||
       refId(requesterRole?.organization) ||
-      refId(srRequester) ||
+      (srRequesterRes?.resourceType === 'Organization' ? srRequesterRes.id : null) ||
+      (/^Organization\//i.test(String(srRequester?.reference || ''))
+        ? refId(srRequester)
+        : null) ||
       null,
     sendingOrgName:
       sendingOrg?.name ||
@@ -2624,7 +2894,10 @@ function summarizeIncomingTaskList(task, byRef = new Map()) {
     receivingOrgFhirId:
       receivingOrg?.id ||
       refId(ownerRole?.organization) ||
-      refId(srPerformer) ||
+      (srPerformerRes?.resourceType === 'Organization' ? srPerformerRes.id : null) ||
+      (/^Organization\//i.test(String(srPerformer?.reference || ''))
+        ? refId(srPerformer)
+        : null) ||
       null,
     receivingOrgName:
       receivingOrg?.name ||
@@ -2660,6 +2933,107 @@ function summarizeIncomingTaskList(task, byRef = new Map()) {
   };
 }
 
+/**
+ * Fill gaps left by incomplete includes (e.g. fulfill Tasks without Task.for).
+ */
+async function hydrateIncomingSummaries(summaries, { concurrency = 8 } = {}) {
+  const list = Array.isArray(summaries) ? summaries : [];
+  const needPatient = list.filter(
+    (s) =>
+      s?.patientFhirId &&
+      (!s.patientName || s.patientName === 'Unknown patient')
+  );
+  const needRecvOrg = list.filter(
+    (s) => !s?.receivingOrgFhirId && s?.ownerRoleFhirId
+  );
+  const needSendOrg = list.filter(
+    (s) => !s?.sendingOrgFhirId && s?.requesterRoleFhirId
+  );
+
+  const run = async (items, fn) => {
+    let next = 0;
+    const workers = Array.from(
+      { length: Math.min(concurrency, items.length) || 0 },
+      async () => {
+        while (next < items.length) {
+          const i = next;
+          next += 1;
+          await fn(items[i]);
+        }
+      }
+    );
+    await Promise.all(workers);
+  };
+
+  await run(needPatient, async (s) => {
+    try {
+      const patient = await getPatient(s.patientFhirId);
+      const name = [patient?.givenName1, patient?.givenName2, patient?.familyName]
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (name) s.patientName = name;
+    } catch {
+      /* keep Unknown patient */
+    }
+  });
+
+  await run(needRecvOrg, async (s) => {
+    try {
+      const role = await getPractitionerRole(s.ownerRoleFhirId);
+      if (role?.organizationFhirId) {
+        s.receivingOrgFhirId = String(role.organizationFhirId);
+        if (!s.receivingOrgName && role.organizationName) {
+          s.receivingOrgName = role.organizationName;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  });
+
+  await run(needSendOrg, async (s) => {
+    try {
+      const role = await getPractitionerRole(s.requesterRoleFhirId);
+      if (role?.organizationFhirId) {
+        s.sendingOrgFhirId = String(role.organizationFhirId);
+        if (!s.sendingOrgName && role.organizationName) {
+          s.sendingOrgName = role.organizationName;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  });
+
+  const needOrgNames = list.filter(
+    (s) =>
+      (s?.receivingOrgFhirId && !s.receivingOrgName) ||
+      (s?.sendingOrgFhirId && !s.sendingOrgName)
+  );
+  await run(needOrgNames, async (s) => {
+    try {
+      if (s.receivingOrgFhirId && !s.receivingOrgName) {
+        const org = await getOrganization(s.receivingOrgFhirId);
+        if (org?.name) s.receivingOrgName = org.name;
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (s.sendingOrgFhirId && !s.sendingOrgName) {
+        const org = await getOrganization(s.sendingOrgFhirId);
+        if (org?.name) s.sendingOrgName = org.name;
+      }
+    } catch {
+      /* ignore */
+    }
+  });
+
+  return list;
+}
+
 async function getTask(fhirId) {
   return fhirGet(`Task/${encodeURIComponent(fhirId)}`);
 }
@@ -2685,6 +3059,107 @@ async function updateTaskStatus(fhirId, status, noteText) {
   });
   const json = await parseFhirResponse(res);
   return { fhirId: json.id || String(fhirId), resource: json, status: res.status };
+}
+
+async function findTasksForServiceRequest(serviceRequestFhirId) {
+  const srId = String(serviceRequestFhirId || '').trim();
+  if (!srId) return [];
+  const params = new URLSearchParams({
+    _count: '20',
+    _sort: '-_lastUpdated',
+    focus: `ServiceRequest/${srId}`,
+  });
+  const json = await parseFhirResponse(
+    await fetch(`${FHIR_BASE_URL}/Task?${params}`, {
+      headers: { Accept: 'application/fhir+json' },
+    })
+  );
+  return (json?.entry || [])
+    .map((e) => e.resource)
+    .filter((r) => r && r.resourceType === 'Task');
+}
+
+/**
+ * Peers sometimes send ServiceRequest only. Create a fulfill Task so we can accept/reject.
+ */
+async function ensureTaskForServiceRequest(serviceRequest, { status = 'requested', noteText } = {}) {
+  const sr =
+    typeof serviceRequest === 'string'
+      ? await getServiceRequest(serviceRequest)
+      : serviceRequest;
+  if (!sr?.id) {
+    const err = new Error('ServiceRequest not found.');
+    err.status = 404;
+    throw err;
+  }
+
+  const existing = await findTasksForServiceRequest(sr.id);
+  if (existing.length) {
+    const task = existing[0];
+    if (status && task.status !== status) {
+      return updateTaskStatus(task.id, status, noteText);
+    }
+    return { fhirId: task.id, resource: task, status: 200, created: false };
+  }
+
+  const now = new Date().toISOString();
+  const performer = pickServiceRequestPerformerRef(sr);
+  const defaultOwner = String(process.env.DEFAULT_FACILITY_FHIR_ID || '').trim();
+  const ownerReference =
+    performer?.reference ||
+    (defaultOwner ? `Organization/${defaultOwner}` : null);
+
+  const task = {
+    resourceType: 'Task',
+    meta: { profile: [TASK_PROFILE] },
+    language: 'en',
+    status: status || 'requested',
+    intent: 'order',
+    code: {
+      coding: [
+        {
+          system: 'http://hl7.org/fhir/CodeSystem/task-code',
+          code: 'fulfill',
+          display: 'Fulfill Referral',
+        },
+      ],
+      text: 'Fulfill Referral',
+    },
+    focus: { reference: `ServiceRequest/${sr.id}` },
+    for: sr.subject || undefined,
+    authoredOn: sr.authoredOn || now,
+    lastModified: now,
+  };
+  if (sr.requester) task.requester = sr.requester;
+  if (ownerReference) task.owner = { reference: ownerReference };
+  if (noteText) task.note = [{ text: String(noteText), time: now }];
+
+  const res = await fetch(`${FHIR_BASE_URL}/Task`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/fhir+json',
+      Accept: 'application/fhir+json',
+    },
+    body: JSON.stringify(task),
+  });
+  const json = await parseFhirResponse(res);
+  return {
+    fhirId: json.id,
+    resource: json,
+    status: res.status,
+    created: true,
+  };
+}
+
+async function updateIncomingByServiceRequest(serviceRequestFhirId, status, noteText) {
+  const srId = String(serviceRequestFhirId || '').trim();
+  if (!srId) {
+    const err = new Error('ServiceRequest FHIR ID is required.');
+    err.status = 400;
+    throw err;
+  }
+  const sr = await getServiceRequest(srId);
+  return ensureTaskForServiceRequest(sr, { status, noteText });
 }
 
 async function putFhirResource(resource) {
@@ -2834,22 +3309,22 @@ async function transferIncomingReferral({
 }
 
 async function enrichIncomingTask(task) {
-  const [patient, serviceRequest, ownerRef, requesterRef] = await Promise.all([
+  const serviceRequest = await getResourceByReference(task.focus);
+  const srPerformer = pickServiceRequestPerformerRef(serviceRequest);
+  const srRequester = serviceRequest?.requester || null;
+
+  const [patientFromTask, patientFromSr, ownerRef, requesterRef] = await Promise.all([
     getResourceByReference(task.for),
-    getResourceByReference(task.focus),
+    getResourceByReference(serviceRequest?.subject),
     getResourceByReference(task.owner),
     getResourceByReference(task.requester),
   ]);
+  const patient = patientFromTask || patientFromSr;
 
   const ownerIsOrg = ownerRef?.resourceType === 'Organization';
   const requesterIsOrg = requesterRef?.resourceType === 'Organization';
   const ownerRole = ownerIsOrg ? null : ownerRef;
   const requesterRole = requesterIsOrg ? null : requesterRef;
-
-  const srRequester = serviceRequest?.requester || null;
-  const srPerformer = Array.isArray(serviceRequest?.performer)
-    ? serviceRequest.performer[0]
-    : serviceRequest?.performer || null;
 
   const [ownerOrg, requesterOrg, ownerPrac, requesterPrac, srRequesterRes, srPerformerRes] =
     await Promise.all([
@@ -2886,12 +3361,41 @@ async function enrichIncomingTask(task) {
     taskStatus: task.status || 'requested',
     serviceRequestFhirId: serviceRequest?.id || refId(task.focus),
     encounterFhirId: refId(serviceRequest?.encounter),
-    patientFhirId: patient?.id || refId(task.for),
-    patientName: humanName(patient) || 'Unknown patient',
-    sendingOrgFhirId: sendingOrg?.id || refId(requesterRole?.organization) || null,
-    sendingOrgName: sendingOrg?.name || null,
-    receivingOrgFhirId: receivingOrg?.id || refId(ownerRole?.organization) || null,
-    receivingOrgName: receivingOrg?.name || null,
+    patientFhirId:
+      patient?.id || refId(task.for) || refId(serviceRequest?.subject) || null,
+    patientName:
+      humanName(patient) ||
+      refDisplay(task.for) ||
+      refDisplay(serviceRequest?.subject) ||
+      'Unknown patient',
+    sendingOrgFhirId:
+      sendingOrg?.id ||
+      refId(requesterRole?.organization) ||
+      (srRequesterRes?.resourceType === 'Organization' ? srRequesterRes.id : null) ||
+      (/^Organization\//i.test(String(srRequester?.reference || ''))
+        ? refId(srRequester)
+        : null) ||
+      null,
+    sendingOrgName:
+      sendingOrg?.name ||
+      refDisplay(requesterRole?.organization) ||
+      refDisplay(task.requester) ||
+      refDisplay(srRequester) ||
+      null,
+    receivingOrgFhirId:
+      receivingOrg?.id ||
+      refId(ownerRole?.organization) ||
+      (srPerformerRes?.resourceType === 'Organization' ? srPerformerRes.id : null) ||
+      (/^Organization\//i.test(String(srPerformer?.reference || ''))
+        ? refId(srPerformer)
+        : null) ||
+      null,
+    receivingOrgName:
+      receivingOrg?.name ||
+      refDisplay(ownerRole?.organization) ||
+      refDisplay(task.owner) ||
+      refDisplay(srPerformer) ||
+      null,
     sendingPracFhirId: requesterPrac?.id || refId(requesterRole?.practitioner),
     sendingPracName: humanName(requesterPrac),
     receivingPracFhirId: ownerPrac?.id || refId(ownerRole?.practitioner),
@@ -3376,9 +3880,13 @@ module.exports = {
   getTask,
   getServiceRequest,
   updateTaskStatus,
+  ensureTaskForServiceRequest,
+  updateIncomingByServiceRequest,
   transferIncomingReferral,
   enrichIncomingTask,
   summarizeIncomingTaskList,
+  hydrateIncomingSummaries,
+  findInboundServiceRequestSummaries,
   loadIncomingReferralPackage,
   buildReferralCollectionBundle,
   loadReferralCollectionBundle,

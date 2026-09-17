@@ -89,8 +89,7 @@ function missingPatientWriteFields(b) {
 }
 
 function patientWriteParams(b, localId) {
-  return {
-    Id: localId,
+  const params = {
     PhilSysId: b.philsysId,
     PhilHealthId: b.philhealthId || null,
     FamilyName: b.familyName,
@@ -112,9 +111,65 @@ function patientWriteParams(b, localId) {
     NextOfKinFamily: b.nextOfKinFamily || null,
     NextOfKinGiven: b.nextOfKinGiven || null,
   };
+  if (localId != null && localId !== '') params.Id = localId;
+  return params;
+}
+
+const RECENT_PIN_MS = 5 * 60 * 1000;
+const recentSavedPatients = new Map();
+
+function pinRecentPatient(patient) {
+  if (!patient) return;
+  const key = String(patient.fhirId || patient.philsysId || `local:${patient.id || ''}`);
+  if (!key || key === 'local:') return;
+  recentSavedPatients.set(key, { patient, expiresAt: Date.now() + RECENT_PIN_MS });
+}
+
+function sameListedPatient(a, b) {
+  if (!a || !b) return false;
+  if (a.id && b.id && Number(a.id) === Number(b.id)) return true;
+  if (a.fhirId && b.fhirId && String(a.fhirId) === String(b.fhirId)) return true;
+  if (
+    a.philsysId &&
+    b.philsysId &&
+    a.philsysId !== '-' &&
+    String(a.philsysId) === String(b.philsysId)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function mergePinnedPatients(patients) {
+  const now = Date.now();
+  const pinned = [];
+  for (const [key, entry] of recentSavedPatients) {
+    if (entry.expiresAt <= now) {
+      recentSavedPatients.delete(key);
+      continue;
+    }
+    pinned.push(entry.patient);
+  }
+  if (!pinned.length) return patients;
+
+  const merged = [...(patients || [])];
+  for (const record of pinned) {
+    const idx = merged.findIndex((p) => sameListedPatient(p, record));
+    if (idx >= 0) {
+      merged[idx] = {
+        ...merged[idx],
+        ...record,
+        fhirId: record.fhirId || merged[idx].fhirId,
+      };
+    } else {
+      merged.unshift(record);
+    }
+  }
+  return sortPatientsNewestFirst(deduplicatePatients(merged));
 }
 
 async function syncLocalPatientToFhir(row, { action, actionTextOk, actionTextFail }) {
+  const localId = Number(row?.Id);
   const displayName = `${row.GivenName1} ${row.FamilyName} (${row.LocalCode})`;
   let fhirResult = null;
   try {
@@ -131,8 +186,16 @@ async function syncLocalPatientToFhir(row, { action, actionTextOk, actionTextFai
           SyncedAt = datetime('now'),
           UpdatedAt = datetime('now')
       WHERE Id = @Id
-    `).run({ Id: row.Id, FhirId: fhirResult.fhirId });
-    row = db.prepare('SELECT * FROM Patients WHERE Id = ?').get(row.Id);
+    `).run({ Id: localId, FhirId: fhirResult.fhirId });
+    row =
+      db.prepare('SELECT * FROM Patients WHERE Id = ?').get(localId) || {
+        ...row,
+        Id: localId,
+        FhirId: fhirResult.fhirId,
+        SyncStatus: 'synced',
+        SyncError: null,
+        SyncedAt: new Date().toISOString(),
+      };
     logActivity({
       eventType: 'Patient',
       entityName: displayName,
@@ -149,8 +212,14 @@ async function syncLocalPatientToFhir(row, { action, actionTextOk, actionTextFai
           SyncError = @SyncError,
           UpdatedAt = datetime('now')
       WHERE Id = @Id
-    `).run({ Id: row.Id, SyncError: fhirErr.message });
-    row = db.prepare('SELECT * FROM Patients WHERE Id = ?').get(row.Id);
+    `).run({ Id: localId, SyncError: fhirErr.message });
+    row =
+      db.prepare('SELECT * FROM Patients WHERE Id = ?').get(localId) || {
+        ...row,
+        Id: localId,
+        SyncStatus: 'failed',
+        SyncError: fhirErr.message,
+      };
     logActivity({
       eventType: 'Patient',
       entityName: displayName,
@@ -189,14 +258,23 @@ async function createLocalPatient(b) {
     ...patientWriteParams(b, null),
   });
 
-  let row = db.prepare('SELECT * FROM Patients WHERE Id = ?').get(info.lastInsertRowid);
+  let row =
+    db.prepare('SELECT * FROM Patients WHERE Id = ?').get(info.lastInsertRowid) || {
+      Id: info.lastInsertRowid,
+      LocalCode: localCode,
+      ...patientWriteParams(b, info.lastInsertRowid),
+      SyncStatus: 'pending',
+    };
+  row.Id = info.lastInsertRowid;
   const { row: syncedRow, fhirResult } = await syncLocalPatientToFhir(row, {
     action: 'created',
     actionTextOk: 'Patient saved',
     actionTextFail: 'Patient saved (FHIR failed)',
   });
+  const patient = mapPatient(syncedRow || row);
+  pinRecentPatient(patient);
   return {
-    patient: mapPatient(syncedRow),
+    patient,
     fhir: fhirResult ? { id: fhirResult.fhirId, status: fhirResult.status } : null,
   };
 }
@@ -241,8 +319,10 @@ async function updateLocalPatient(localId, b) {
     actionTextOk: 'Patient updated',
     actionTextFail: 'Patient updated (FHIR failed)',
   });
+  const patient = mapPatient(syncedRow);
+  pinRecentPatient(patient);
   return {
-    patient: mapPatient(syncedRow),
+    patient,
     fhir: fhirResult ? { id: fhirResult.fhirId, status: fhirResult.status } : null,
   };
 }
@@ -321,7 +401,7 @@ router.get('/', async (req, res) => {
   const localPatients = loadLocalPatients();
 
   if (forceLocal) {
-    let patients = localPatients;
+    let patients = mergePinnedPatients(localPatients);
     if (q) patients = patients.filter((p) => matchesQuery(p, q));
     patients = sortPatientsNewestFirst(patients);
     if (wantsPage) {
@@ -347,7 +427,7 @@ router.get('/', async (req, res) => {
       maxPages: 100,
     });
 
-    let patients = mergeFhirWithLocal(fhirPatients, localPatients);
+    let patients = mergePinnedPatients(mergeFhirWithLocal(fhirPatients, localPatients));
     if (q) patients = patients.filter((p) => matchesQuery(p, q));
 
     const warning = `Loaded ${patients.length} patient(s) from FHIR${
@@ -369,7 +449,7 @@ router.get('/', async (req, res) => {
     });
   } catch (err) {
     const detail = err.cause?.message || err.message || 'Unknown error';
-    let patients = localPatients;
+    let patients = mergePinnedPatients(localPatients);
     if (q) patients = patients.filter((p) => matchesQuery(p, q));
     patients = sortPatientsNewestFirst(patients);
     if (patients.length) {
@@ -547,6 +627,7 @@ router.put('/fhir/:fhirId', async (req, res) => {
       syncStatus: 'synced',
       source: 'fhir',
     };
+    pinRecentPatient(patient);
     logActivity({
       eventType: 'Patient',
       entityName: `${b.givenName1} ${b.familyName}`,

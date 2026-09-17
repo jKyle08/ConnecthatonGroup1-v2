@@ -3,10 +3,13 @@ const { db } = require('./db');
 const {
   searchTasks,
   summarizeIncomingTaskList,
+  hydrateIncomingSummaries,
+  findInboundServiceRequestSummaries,
   loadIncomingReferralPackage,
   loadReferralCollectionBundle,
   fetchTaskHistory,
   updateTaskStatus,
+  updateIncomingByServiceRequest,
   transferIncomingReferral,
   getTask,
 } = require('./fhir');
@@ -14,6 +17,16 @@ const { logActivity, publishDashboard } = require('./activity');
 
 const router = express.Router();
 const TEAM_PREFIX = process.env.TEAM_PREFIX || 'TEAM07';
+const DEFAULT_FACILITY_FHIR_ID = String(
+  process.env.DEFAULT_FACILITY_FHIR_ID || ''
+).trim();
+
+/** Last successful unfiltered FHIR inbox snapshot (survives transient CDR flakes). */
+let lastGoodIncoming = {
+  at: null,
+  referrals: [],
+  scanned: 0,
+};
 
 function mapReferral(row) {
   if (!row) return null;
@@ -275,11 +288,12 @@ function upsertIncomingReferral(mapped) {
 }
 
 function isIncomingMatch(mapped, { q, receivingOrgFhirId }) {
-  if (
-    receivingOrgFhirId &&
-    String(mapped.receivingOrgFhirId || '') !== receivingOrgFhirId
-  ) {
-    return false;
+  if (receivingOrgFhirId) {
+    const facilityId = String(receivingOrgFhirId).trim();
+    const recv = String(mapped.receivingOrgFhirId || '');
+    const send = String(mapped.sendingOrgFhirId || '');
+    // Facility filter = involvement (to OR from). G1 is often the sender.
+    if (recv !== facilityId && send !== facilityId) return false;
   }
   if (q) {
     const hay = Object.values(mapped)
@@ -390,6 +404,22 @@ router.get('/', async (req, res) => {
       }
     });
 
+    await hydrateIncomingSummaries(mappedList.filter(Boolean));
+
+    // Some peers POST ServiceRequest to our Organization without a Task.
+    // Merge those inbound ServiceRequests so G1 (and filtered facilities) see them.
+    const inboundOrgIds = new Set();
+    if (receivingOrgFhirId) inboundOrgIds.add(receivingOrgFhirId);
+    if (DEFAULT_FACILITY_FHIR_ID) inboundOrgIds.add(DEFAULT_FACILITY_FHIR_ID);
+    for (const orgId of inboundOrgIds) {
+      try {
+        const srRows = await findInboundServiceRequestSummaries(orgId);
+        mappedList.push(...srRows);
+      } catch (err) {
+        console.warn('Inbound ServiceRequest merge failed for', orgId, err.message);
+      }
+    }
+
     const summaries = dedupeIncomingSummaries(
       mappedList
         .filter(Boolean)
@@ -413,6 +443,15 @@ router.get('/', async (req, res) => {
       return String(b.taskFhirId || '').localeCompare(String(a.taskFhirId || ''));
     });
 
+    // Cache the unfiltered live list so a later CDR flake can fall back.
+    if (!q && !receivingOrgFhirId && summaries.length) {
+      lastGoodIncoming = {
+        at: new Date().toISOString(),
+        referrals: summaries,
+        scanned: uniqueTasks.length,
+      };
+    }
+
     return res.json({
       source: 'fhir',
       status,
@@ -424,6 +463,30 @@ router.get('/', async (req, res) => {
       paged: true,
     });
   } catch (err) {
+    // Prefer last-good inbox over a blank/false-empty response when CDR flakes.
+    if (lastGoodIncoming.referrals.length) {
+      const cached = lastGoodIncoming.referrals.filter((mapped) =>
+        isIncomingMatch(mapped, { q, receivingOrgFhirId })
+      );
+      console.warn(
+        'Incoming FHIR fetch failed; serving last-good cache:',
+        err.message,
+        `(${cached.length} rows)`
+      );
+      return res.json({
+        source: 'fhir-cache',
+        status,
+        receivingOrgFhirId: receivingOrgFhirId || null,
+        referrals: cached,
+        total: cached.length,
+        scanned: lastGoodIncoming.scanned,
+        pageSize: count,
+        paged: true,
+        stale: true,
+        cachedAt: lastGoodIncoming.at,
+        warning: err.message,
+      });
+    }
     res.status(err.status || 500).json({ error: err.message });
   }
 });
@@ -585,6 +648,61 @@ router.post('/task/:taskId/status', async (req, res) => {
       taskStatus: status,
       fhir: fhirResult || null,
       source: 'fhir',
+    });
+  } catch (err) {
+    res.status(err.status || 502).json({ error: err.message });
+  }
+});
+
+/** Accept/reject ServiceRequest-only inbound referrals (creates Task when missing). */
+router.post('/servicerequest/:srId/status', async (req, res) => {
+  const srId = String(req.params.srId || '').trim();
+  const status = String(req.body?.status || '').toLowerCase();
+  const allowed = new Set([
+    'requested',
+    'received',
+    'accepted',
+    'rejected',
+    'in-progress',
+    'on-hold',
+    'completed',
+    'cancelled',
+  ]);
+  if (!srId) return res.status(400).json({ error: 'ServiceRequest FHIR ID is required.' });
+  if (!allowed.has(status)) {
+    return res.status(400).json({ error: `Invalid status. Allowed: ${[...allowed].join(', ')}` });
+  }
+
+  try {
+    const note =
+      req.body?.note ||
+      (status === 'accepted'
+        ? 'Referral accepted by receiving facility.'
+        : status === 'rejected'
+          ? 'Referral rejected by receiving facility.'
+          : status === 'received'
+            ? 'Referral marked as received.'
+            : `Referral status set to ${status}.`);
+    const fhirResult = await updateIncomingByServiceRequest(srId, status, note);
+
+    logActivity({
+      eventType: 'Referral',
+      entityName: `ServiceRequest/${srId}`,
+      actionText: `Incoming referral ${status}${fhirResult.created ? ' (Task created)' : ''}`,
+      syncStatus: 'synced',
+      details: note,
+      entity: 'referral',
+    });
+    publishDashboard();
+
+    res.json({
+      ok: true,
+      source: 'fhir',
+      serviceRequestFhirId: srId,
+      taskFhirId: fhirResult.fhirId,
+      taskStatus: status,
+      taskCreated: Boolean(fhirResult.created),
+      fhir: fhirResult || null,
     });
   } catch (err) {
     res.status(err.status || 502).json({ error: err.message });

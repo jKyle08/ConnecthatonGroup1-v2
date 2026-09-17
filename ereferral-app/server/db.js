@@ -43,6 +43,99 @@ function normalizeKey(k) {
   return k.replace(/^@/, '');
 }
 
+/** Split comma-separated SQL tokens, ignoring commas inside quotes/parens. */
+function splitSqlList(text) {
+  const out = [];
+  let cur = '';
+  let depth = 0;
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      cur += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (ch === '(') {
+      depth++;
+      cur += ch;
+      continue;
+    }
+    if (ch === ')') {
+      depth = Math.max(0, depth - 1);
+      cur += ch;
+      continue;
+    }
+    if (ch === ',' && depth === 0) {
+      out.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+function resolveSqlValue(raw, params = {}) {
+  const v = String(raw || '').trim();
+  if (!v) return undefined;
+  if (/^NULL$/i.test(v)) return null;
+  if (/^datetime\s*\(\s*'now'\s*\)$/i.test(v)) return new Date().toISOString();
+  if (/^@(?:\w+)$/i.test(v) || /^\?$/.test(v)) {
+    const key = normalizeKey(v);
+    if (Object.prototype.hasOwnProperty.call(params, key)) return params[key];
+    if (Object.prototype.hasOwnProperty.call(params, `@${key}`)) return params[`@${key}`];
+    return undefined;
+  }
+  const str = v.match(/^'(.*)'$/s);
+  if (str) return str[1].replace(/''/g, "'");
+  if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v);
+  return undefined;
+}
+
+function applyInsertLiterals(rawSql, row, params = {}) {
+  const m = rawSql.match(
+    /INSERT\s+INTO\s+\w+\s*\(([^)]+)\)\s*VALUES\s*\(([\s\S]+)\)\s*$/i
+  );
+  if (!m) return;
+  const cols = splitSqlList(m[1]);
+  const vals = splitSqlList(m[2]);
+  const n = Math.min(cols.length, vals.length);
+  for (let i = 0; i < n; i++) {
+    const col = cols[i].replace(/["`\[\]]/g, '').trim();
+    if (!col || col === 'Id') continue;
+    // Prefer explicit run() params; fall back to SQL literals like 'pending'.
+    if (Object.prototype.hasOwnProperty.call(params, col) ||
+        Object.prototype.hasOwnProperty.call(params, `@${col}`)) {
+      continue;
+    }
+    const resolved = resolveSqlValue(vals[i], params);
+    if (resolved !== undefined) row[col] = resolved;
+  }
+}
+
+function applyUpdateLiterals(rawSql, row, params = {}) {
+  const m = rawSql.match(/SET\s+([\s\S]+?)(?:\s+WHERE\b|$)/i);
+  if (!m) return;
+  for (const part of splitSqlList(m[1])) {
+    const am = part.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([\s\S]+)$/);
+    if (!am) continue;
+    const col = am[1];
+    if (col === 'Id') continue;
+    const rhs = am[2].trim();
+    // Bound params already applied from the params object; apply SQL literals / NULL / datetime.
+    if (/^@/.test(rhs) || rhs === '?') continue;
+    const resolved = resolveSqlValue(rhs, params);
+    if (resolved !== undefined) row[col] = resolved;
+  }
+}
+
 const db = {
   prepare(sql) {
     const rawSql = String(sql || '').trim();
@@ -165,20 +258,28 @@ const db = {
           };
           if (params && typeof params === 'object') {
             for (const [k, v] of Object.entries(params)) {
-              row[normalizeKey(k)] = v;
+              const key = normalizeKey(k);
+              // Never let a null/empty Id from callers wipe the generated key.
+              if (key === 'Id' && (v == null || v === '')) continue;
+              if (v !== undefined) row[key] = v;
             }
           }
+          applyInsertLiterals(rawSql, row, params || {});
+          row.Id = id;
           store.set(id, row);
           return { lastInsertRowid: id, changes: 1 };
         }
         if (/UPDATE/i.test(rawSql)) {
           const id = Number(params.Id || params.id);
-          const existing = store.get(id);
+          const existing = Number.isFinite(id) && id > 0 ? store.get(id) : null;
           if (existing && params && typeof params === 'object') {
             for (const [k, v] of Object.entries(params)) {
               const cleanKey = normalizeKey(k);
+              if (cleanKey === 'Id') continue;
               if (v !== undefined) existing[cleanKey] = v;
             }
+            applyUpdateLiterals(rawSql, existing, params);
+            existing.Id = id;
             existing.UpdatedAt = new Date().toISOString();
             store.set(id, existing);
           }

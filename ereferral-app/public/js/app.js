@@ -61,6 +61,7 @@ const state = {
     source: 'fhir',
     receivingOrgFhirId: null,
     facilitiesLoaded: false,
+    suppressFacilityChange: false,
     pollTimer: null,
     loading: false,
     requestId: 0,
@@ -1541,7 +1542,7 @@ function patientMatchesSearch(patient, q) {
 }
 
 function patientSortKey(p) {
-  const created = Date.parse(p.createdAt || p.updatedAt || '') || 0;
+  const created = Date.parse(p.createdAt || p.updatedAt || p.syncedAt || '') || 0;
   const localId = Number(p.id) || 0;
   const fhirNum = Number(p.fhirId);
   const fhirId = Number.isFinite(fhirNum) ? fhirNum : 0;
@@ -1552,9 +1553,13 @@ function sortPatientsNewestFirst(patients) {
   return [...patients].sort((a, b) => {
     const ka = patientSortKey(a);
     const kb = patientSortKey(b);
-    // Prefer higher FHIR IDs first (connectathon CDR assigns increasing ids).
+    const recencyGap = kb.created - ka.created;
+    // Brand-new local rows may not have a numeric FHIR ID yet; keep them on page 1.
+    if (recencyGap !== 0 && (ka.fhirId === 0 || kb.fhirId === 0) && Math.abs(recencyGap) < 5 * 60 * 1000) {
+      return recencyGap;
+    }
     if (kb.fhirId !== ka.fhirId) return kb.fhirId - ka.fhirId;
-    if (kb.created !== ka.created) return kb.created - ka.created;
+    if (recencyGap !== 0) return recencyGap;
     return kb.localId - ka.localId;
   });
 }
@@ -1563,7 +1568,22 @@ function samePatient(a, b) {
   if (!a || !b) return false;
   if (a.id && b.id && Number(a.id) === Number(b.id)) return true;
   if (a.fhirId && b.fhirId && String(a.fhirId) === String(b.fhirId)) return true;
-  if (a.localCode && b.localCode && String(a.localCode) === String(b.localCode)) return true;
+  if (
+    a.localCode &&
+    b.localCode &&
+    a.localCode !== '-' &&
+    String(a.localCode) === String(b.localCode)
+  ) {
+    return true;
+  }
+  if (
+    a.philsysId &&
+    b.philsysId &&
+    a.philsysId !== '-' &&
+    String(a.philsysId) === String(b.philsysId)
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -1637,7 +1657,7 @@ function rememberRecentPatient(record) {
   const kept = (state.patients.recentCreates || []).filter(
     (x) => x.expiresAt > now && !samePatient(x.record, stamped)
   );
-  kept.unshift({ record: stamped, expiresAt: now + 90_000 });
+  kept.unshift({ record: stamped, expiresAt: now + 5 * 60_000 });
   state.patients.recentCreates = kept.slice(0, 25);
 }
 
@@ -1720,6 +1740,7 @@ function handlePatientRealtime({ action, record } = {}) {
   schedulePatientsReload({ silent: true, delay: isCreate ? 600 : 350 });
 }
 
+let patientsLoadSeq = 0;
 async function loadPatients({ silent = false } = {}) {
   const body = $('#patientsBody');
   const subtitle = $('#patientsSubtitle');
@@ -1727,6 +1748,7 @@ async function loadPatients({ silent = false } = {}) {
     body.innerHTML = `<tr><td colspan="6" class="placeholder">Loading patients from FHIR...</td></tr>`;
   }
 
+  const seq = ++patientsLoadSeq;
   const params = new URLSearchParams();
   params.set('source', 'fhir');
   params.set('count', '200');
@@ -1735,9 +1757,11 @@ async function loadPatients({ silent = false } = {}) {
   try {
     const res = await fetch(`/api/patients?${params}`);
     const data = await res.json();
+    if (seq !== patientsLoadSeq) return;
     if (!res.ok) throw new Error(data.error || 'Failed to load patients');
     applyPatientsData(data);
   } catch (err) {
+    if (seq !== patientsLoadSeq) return;
     if (!silent || !(state.patients.items || []).length) {
       body.innerHTML = `<tr><td colspan="6" class="placeholder">${escapeHtml(err.message)}</td></tr>`;
       $('#patientsMeta').textContent = '-';
@@ -4619,15 +4643,24 @@ function openInboxActions(status) {
 }
 
 function incomingActionButtons(r) {
-  const canAct = openInboxActions(r.taskStatus) && (r.id || r.taskFhirId);
+  const canAct =
+    openInboxActions(r.taskStatus) && (r.id || r.taskFhirId || r.serviceRequestFhirId);
   const viewAttr = r.id
     ? `data-action="view" data-entity="incoming" data-id="${r.id}"`
-    : `data-action="view" data-entity="incoming-task" data-task-id="${escapeHtml(r.taskFhirId || '')}"`;
+    : r.taskFhirId
+      ? `data-action="view" data-entity="incoming-task" data-task-id="${escapeHtml(r.taskFhirId)}"`
+      : r.serviceRequestFhirId
+        ? `data-action="view" data-entity="incoming-sr" data-sr-id="${escapeHtml(
+            r.serviceRequestFhirId
+          )}"`
+        : '';
   const statusAttr = r.id
     ? `data-id="${r.id}"`
     : r.taskFhirId
       ? `data-task-id="${escapeHtml(r.taskFhirId)}"`
-      : '';
+      : r.serviceRequestFhirId
+        ? `data-sr-id="${escapeHtml(r.serviceRequestFhirId)}"`
+        : '';
   const transferAttr = r.taskFhirId
     ? `data-action="transfer" data-entity="incoming-task" data-task-id="${escapeHtml(
         r.taskFhirId
@@ -4636,8 +4669,9 @@ function incomingActionButtons(r) {
       )}" data-receiving-org-name="${escapeHtml(r.receivingOrgName || '')}"`
     : '';
   const items = [
-    actionMenuItem('View', viewAttr),
+    viewAttr ? actionMenuItem('View', viewAttr) : '',
     canAct ? actionMenuItem('Accept', `data-incoming-status="accepted" ${statusAttr}`) : '',
+    canAct ? actionMenuItem('Reject', `data-incoming-status="rejected" ${statusAttr}`) : '',
     canAct && transferAttr ? actionMenuItem('Transfer', transferAttr) : '',
   ]
     .filter(Boolean)
@@ -4678,7 +4712,7 @@ async function ensureInboxFacilityFilter() {
     );
 
     destroySearchableSelect(select);
-    select.innerHTML = `<option value="">All receiving facilities</option>`;
+    select.innerHTML = `<option value="">All facilities</option>`;
     facilities.forEach((o) => {
       const opt = document.createElement('option');
       opt.value = o.fhirId;
@@ -4690,10 +4724,12 @@ async function ensureInboxFacilityFilter() {
       select.appendChild(opt);
     });
     state.inbox.facilitiesLoaded = true;
+    // Default to All facilities so inbox is never empty due to home-only filter.
     const preferred =
-      state.inbox.receivingOrgFhirId != null
+      state.inbox.receivingOrgFhirId != null && state.inbox.receivingOrgFhirId !== ''
         ? String(state.inbox.receivingOrgFhirId)
         : previous || '';
+    state.inbox.suppressFacilityChange = true;
     if (preferred && [...select.options].some((o) => o.value === preferred)) {
       select.value = preferred;
       state.inbox.receivingOrgFhirId = preferred;
@@ -4702,12 +4738,15 @@ async function ensureInboxFacilityFilter() {
       state.inbox.receivingOrgFhirId = '';
     }
     initSearchableSelect(select, { force: true });
+    setTimeout(() => {
+      state.inbox.suppressFacilityChange = false;
+    }, 0);
   } catch (err) {
     destroySearchableSelect(select);
-    select.innerHTML = `<option value="">All receiving facilities</option>`;
+    select.innerHTML = `<option value="">All facilities</option>`;
     initSearchableSelect(select, { force: true });
     showToast(err.message || 'Could not load facilities', 'warn', {
-      title: 'Receiving facility filter',
+      title: 'Facility filter',
     });
   } finally {
     select.disabled = false;
@@ -4757,7 +4796,7 @@ function updateInboxPager() {
       q
         ? `${from}-${to} of ${total} match${total === 1 ? '' : 'es'}`
         : `${from}-${to} of ${total}`,
-      facilityFilter ? 'filtered by receiving facility' : null,
+      facilityFilter ? 'filtered by facility (from or to)' : null,
       cached ? `${cache.length} from FHIR` : null,
     ]
       .filter(Boolean)
@@ -4775,7 +4814,11 @@ function filterInboxCache(items, { q, status, receivingOrgFhirId } = {}) {
 
   if (receivingOrgFhirId) {
     const facilityId = String(receivingOrgFhirId).trim();
-    rows = rows.filter((r) => String(r.receivingOrgFhirId || '') === facilityId);
+    rows = rows.filter((r) => {
+      const recv = String(r.receivingOrgFhirId || '');
+      const send = String(r.sendingOrgFhirId || '');
+      return recv === facilityId || send === facilityId;
+    });
   }
 
   if (q) {
@@ -4844,13 +4887,16 @@ function renderInboxFromCache() {
   setInboxBadgeCount(openCount || total || 0);
 
   if (!total) {
-    body.innerHTML = `<tr class="placeholder-row"><td colspan="8" class="placeholder">${
-      facilityFilter
-        ? 'No incoming referrals for this receiving facility.'
-        : query || (statusFilter && statusFilter !== 'all')
-          ? 'No incoming referrals match the current filters.'
-          : 'No incoming referrals found on FHIR.'
-    }</td></tr>`;
+    let emptyMsg = 'No incoming referrals found on FHIR.';
+    if (facilityFilter) {
+      emptyMsg =
+        'No referrals involve this facility yet. Clear the facility filter to see all Tasks from FHIR.';
+    } else if (query || (statusFilter && statusFilter !== 'all')) {
+      emptyMsg = 'No incoming referrals match the current filters.';
+    }
+    body.innerHTML = `<tr class="placeholder-row"><td colspan="8" class="placeholder">${escapeHtml(
+      emptyMsg
+    )}</td></tr>`;
     return;
   }
 
@@ -4876,7 +4922,14 @@ function renderInboxFromCache() {
         <td><span class="cell-ellipsis" title="${escapeHtml(from)}">${escapeHtml(from)}</span></td>
         <td><span class="cell-ellipsis" title="${escapeHtml(to)}">${escapeHtml(to)}</span></td>
         <td><span class="cell-ellipsis" title="${escapeHtml(category)}">${escapeHtml(category)}</span></td>
-        <td>${statusTag(r.taskStatus)}</td>
+        <td>
+          ${statusTag(r.taskStatus)}
+          ${
+            r.missingTask
+              ? `<div class="muted cell-sub">ServiceRequest only</div>`
+              : ''
+          }
+        </td>
         <td class="col-when"><span class="cell-ellipsis" title="${escapeHtml(
           formatDateTime(r.dateOfReferral || r.createdAt)
         )}">${formatDateTime(r.dateOfReferral || r.createdAt)}</span></td>
@@ -4898,8 +4951,8 @@ async function loadInboxReferrals({
   const meta = $('#inboxMeta');
   if (!body) return;
 
-  // Kick facility options early; inbox fetch does not need them first.
-  const facilitiesPromise = ensureInboxFacilityFilter();
+  // Don't block inbox on facility dropdown load.
+  const facilitiesPromise = ensureInboxFacilityFilter().catch(() => {});
 
   if (q !== undefined) {
     state.inbox.q = q;
@@ -4932,12 +4985,25 @@ async function loadInboxReferrals({
     syncSearchableSelect($('#inboxStatusFilter'));
   }
   if ($('#inboxReceivingFacilityFilter')) {
+    state.inbox.suppressFacilityChange = true;
     $('#inboxReceivingFacilityFilter').value = facilityFilter;
     syncSearchableSelect($('#inboxReceivingFacilityFilter'));
+    setTimeout(() => {
+      state.inbox.suppressFacilityChange = false;
+    }, 0);
   }
 
-  // Facility / status / search / page: filter the cached FHIR list locally.
-  if (!force && state.inbox.cache.length) {
+  // Use cache only for quick paging within 5s; otherwise refetch so new peer referrals appear.
+  const cacheAgeMs = state.inbox.cacheAt
+    ? Date.now() - (Date.parse(state.inbox.cacheAt) || 0)
+    : Number.POSITIVE_INFINITY;
+  const cacheFresh = Number.isFinite(cacheAgeMs) && cacheAgeMs >= 0 && cacheAgeMs < 5000;
+  const pagingOnly =
+    page !== undefined &&
+    q === undefined &&
+    status === undefined &&
+    receivingOrgFhirId === undefined;
+  if (!force && pagingOnly && state.inbox.cache.length && cacheFresh) {
     renderInboxFromCache();
     return;
   }
@@ -4948,21 +5014,43 @@ async function loadInboxReferrals({
     body.innerHTML = `<tr class="placeholder-row"><td colspan="8" class="placeholder">${inboxLoadingMessage()}</td></tr>`;
   }
 
-  try {
-    // Fetch all FHIR referral Task pages; client filters by facility/status/search.
+  const fetchInbox = async () => {
     const params = new URLSearchParams({
       source: 'fhir',
       status: 'all',
       count: '100',
     });
+    // Always include home facility inbound ServiceRequests on the server.
+    // Only pass filter when user explicitly chose one.
+    if (facilityFilter) params.set('receivingOrgFhirId', facilityFilter);
     const res = await fetch(`/api/incoming?${params}`);
     const data = await parseResponseJson(res, '/api/incoming');
-    if (requestId !== state.inbox.requestId) return;
     if (!res.ok) throw new Error(data?.error || 'Failed to load incoming referrals');
+    return data;
+  };
+
+  try {
+    let data;
+    try {
+      data = await fetchInbox();
+    } catch (firstErr) {
+      // CDR can flake; one retry before failing the inbox.
+      await new Promise((r) => setTimeout(r, 800));
+      if (requestId !== state.inbox.requestId) return;
+      data = await fetchInbox();
+    }
+    if (requestId !== state.inbox.requestId) return;
 
     state.inbox.cache = data.referrals || [];
     state.inbox.cacheAt = new Date().toISOString();
     renderInboxFromCache();
+    if (data.stale || data.source === 'fhir-cache') {
+      showToast(
+        data.warning || 'Showing last successful FHIR inbox while CDR recovers.',
+        'warn',
+        { title: 'Incoming (cached)' }
+      );
+    }
   } catch (err) {
     if (requestId !== state.inbox.requestId) return;
     if (!quiet) {
@@ -4973,7 +5061,7 @@ async function loadInboxReferrals({
         body.innerHTML = `<tr class="placeholder-row"><td colspan="8" class="placeholder">${escapeHtml(
           err.message || 'Could not load incoming referrals'
         )}</td></tr>`;
-        if (meta) meta.textContent = 'Error';
+        if (meta) meta.textContent = 'Error — click Refresh from FHIR';
         showToast(err.message, 'err', { title: 'Incoming referrals' });
       }
     }
@@ -5289,18 +5377,25 @@ async function openIncoming(mode, { id, taskId }) {
   }
 }
 
-async function updateIncomingStatus({ id, taskId }, status) {
+async function updateIncomingStatus({ id, taskId, serviceRequestId }, status) {
   await withProgress(
     {
       title: status === 'accepted' ? 'Accepting referral' : 'Updating referral',
-      message: `Setting Task status to ${status}...`,
-      steps: ['Update FHIR Task', 'Refresh incoming list'],
+      message: `Setting status to ${status}...`,
+      steps: [
+        serviceRequestId && !taskId
+          ? 'Create/update FHIR Task from ServiceRequest'
+          : 'Update FHIR Task',
+        'Refresh incoming list',
+      ],
     },
     async ({ setProgressStep, completeProgressModal }) => {
       setProgressStep(0, 'active');
       const url = id
         ? `/api/incoming/${id}/status`
-        : `/api/incoming/task/${encodeURIComponent(taskId)}/status`;
+        : taskId
+          ? `/api/incoming/task/${encodeURIComponent(taskId)}/status`
+          : `/api/incoming/servicerequest/${encodeURIComponent(serviceRequestId)}/status`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -5314,7 +5409,13 @@ async function updateIncomingStatus({ id, taskId }, status) {
       loadDashboard();
       setProgressStep(1, 'done');
       completeProgressModal(true);
-      showToast(`Referral marked as ${status}`, 'ok', { title: 'Task updated' });
+      showToast(
+        data.taskCreated
+          ? `Referral ${status} (Task ${data.taskFhirId} created)`
+          : `Referral marked as ${status}`,
+        'ok',
+        { title: 'Referral updated' }
+      );
     }
   );
 }
@@ -5788,19 +5889,19 @@ async function saveReferral(e) {
         completeProgressModal(true);
 
         const referral = data.referral;
-        if (referral?.syncStatus === 'synced') {
+        const srId =
+          referral?.serviceRequestFhirId || data.fhir?.serviceRequestId || null;
+        if (referral?.syncStatus === 'synced' || srId) {
           showToast(
-            `Referral ${referral.localCode} submitted. ServiceRequest ${
-              referral.serviceRequestFhirId || data.fhir?.serviceRequestId || '-'
-            }`,
+            `Referral ${referral?.localCode || ''} submitted. ServiceRequest ${srId || '-'}`,
             'ok',
             { title: 'Referral created' }
           );
         } else {
           showToast(
-            `Saved locally, FHIR sync failed: ${referral?.syncError || 'unknown'}`,
+            `FHIR sync failed: ${referral?.syncError || 'unknown'}`,
             'warn',
-            { title: 'Partial save' }
+            { title: 'Submit incomplete' }
           );
         }
 
@@ -5868,7 +5969,19 @@ async function savePatient(e) {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Save failed');
 
-        const patient = data.patient;
+        const nowIso = new Date().toISOString();
+        const patient = data.patient || {
+          ...payload,
+          fhirId: data.fhir?.id || data.fhir?.sourceId || null,
+          syncStatus: data.fhir?.id ? 'synced' : 'pending',
+          source: data.fhir?.id ? 'fhir' : 'local',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+        if (!patient.fhirId && data.fhir?.id) patient.fhirId = data.fhir.id;
+        if (!patient.createdAt) patient.createdAt = nowIso;
+        if (!patient.updatedAt) patient.updatedAt = nowIso;
+
         if (patient?.syncStatus === 'synced' || data.fhir?.id) {
           setProgressStep(1, 'done');
           completeProgressModal(true);
@@ -5896,24 +6009,23 @@ async function savePatient(e) {
             const searchInput = $('#patientSearchInput');
             if (searchInput) searchInput.value = '';
           }
-          if (patient) {
-            rememberRecentPatient(patient);
-            upsertPatientRealtime(
-              {
-                ...patient,
-                createdAt: patient.createdAt || new Date().toISOString(),
-                updatedAt: patient.updatedAt || new Date().toISOString(),
-              },
-              'created'
-            );
-          }
+          rememberRecentPatient(patient);
+          upsertPatientRealtime(
+            {
+              ...patient,
+              createdAt: patient.createdAt || nowIso,
+              updatedAt: patient.updatedAt || nowIso,
+            },
+            'created'
+          );
         } else if (patient) {
           rememberRecentPatient(patient);
           upsertPatientRealtime(patient, 'updated');
         }
         setView('patients');
         // FHIR search can lag; keep the row visible then refresh again shortly.
-        schedulePatientsReload({ silent: true, delay: 1200 });
+        schedulePatientsReload({ silent: true, delay: 1500 });
+        setTimeout(() => loadPatients({ silent: true }), 4500);
       }
     );
   } catch (err) {
@@ -6377,11 +6489,12 @@ document.addEventListener('click', async (e) => {
   if (statusBtn) {
     const id = statusBtn.dataset.id || null;
     const taskId = statusBtn.dataset.taskId || null;
+    const serviceRequestId = statusBtn.dataset.srId || null;
     const status = statusBtn.dataset.incomingStatus || statusBtn.dataset.referralStatus;
-    if ((!id && !taskId) || !status) return;
+    if ((!id && !taskId && !serviceRequestId) || !status) return;
     statusBtn.disabled = true;
     try {
-      await updateIncomingStatus({ id, taskId }, status);
+      await updateIncomingStatus({ id, taskId, serviceRequestId }, status);
     } catch (err) {
       showToast(err.message, 'err', { title: 'Status update failed' });
     } finally {
@@ -6765,6 +6878,7 @@ $('#inboxSearchForm')?.addEventListener('submit', (e) => {
     status: $('#inboxStatusFilter')?.value || 'all',
     receivingOrgFhirId: $('#inboxReceivingFacilityFilter')?.value || '',
     page: 1,
+    force: true,
   });
 });
 
@@ -6797,8 +6911,28 @@ $('#inboxStatusFilter')?.addEventListener('change', () => {
 });
 
 $('#inboxReceivingFacilityFilter')?.addEventListener('change', () => {
-  loadInboxReferrals({ receivingOrgFhirId: $('#inboxReceivingFacilityFilter').value });
+  if (state.inbox.suppressFacilityChange) return;
+  loadInboxReferrals({
+    receivingOrgFhirId: $('#inboxReceivingFacilityFilter').value,
+    force: true,
+  });
 });
+
+if (window.jQuery) {
+  jQuery(document)
+    .off('change.inboxFacility select2:select.inboxFacility')
+    .on(
+      'change.inboxFacility select2:select.inboxFacility',
+      '#inboxReceivingFacilityFilter',
+      () => {
+        if (state.inbox.suppressFacilityChange) return;
+        loadInboxReferrals({
+          receivingOrgFhirId: jQuery('#inboxReceivingFacilityFilter').val() || '',
+          force: true,
+        });
+      }
+    );
+}
 
 $('#btnRefreshInboxLocal')?.addEventListener('click', (e) => {
   e.preventDefault();
