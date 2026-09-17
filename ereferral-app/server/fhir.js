@@ -526,22 +526,31 @@ function matchesQuery(patient, q) {
   return hay.includes(q.toLowerCase());
 }
 
-async function fetchFhirBundlePages(startUrl, { maxPages = 100 } = {}) {
+async function fetchFhirBundlePages(startUrl, { maxPages = 5, maxEntries = 300 } = {}) {
   const entries = [];
   let nextUrl = startUrl;
   let pages = 0;
 
-  while (nextUrl && pages < maxPages) {
-    const res = await fetch(nextUrl, {
-      headers: { Accept: 'application/fhir+json' },
-    });
-    const json = await parseFhirResponse(res);
-    pages += 1;
-    for (const entry of json?.entry || []) {
-      if (entry?.resource) entries.push(entry);
+  while (nextUrl && pages < maxPages && entries.length < maxEntries) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch(nextUrl, {
+        headers: { Accept: 'application/fhir+json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const json = await parseFhirResponse(res);
+      pages += 1;
+      for (const entry of json?.entry || []) {
+        if (entry?.resource) entries.push(entry);
+      }
+      const next = (json?.link || []).find((l) => l.relation === 'next');
+      nextUrl = next?.url || null;
+    } catch (err) {
+      console.warn('fetchFhirBundlePages page fetch warning:', err.message);
+      break;
     }
-    const next = (json?.link || []).find((l) => l.relation === 'next');
-    nextUrl = next?.url || null;
   }
 
   return entries;

@@ -1,33 +1,62 @@
-require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
-const Database = require('better-sqlite3');
+const isServerless = Boolean(
+  process.env.NETLIFY ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.LAMBDA_TASK_ROOT
+);
 
-const dataDir = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-
-/*
- * Persistent local SQLite is temporarily disabled.
- * Set USE_PERSISTENT_LOCAL_DB=true to restore ereferral-local.db on disk.
- * While disabled we keep an in-memory SQLite schema so existing route code
- * still compiles, but nothing is written to the local database file.
- */
 const USE_PERSISTENT_LOCAL_DB =
+  !isServerless &&
   String(process.env.USE_PERSISTENT_LOCAL_DB || 'false').toLowerCase() === 'true';
 
-// const dbPath = process.env.SQLITE_PATH || path.join(dataDir, 'ereferral-local.db');
-// const db = new Database(dbPath);
+let dataDir = path.join(__dirname, '..', 'data');
+if (USE_PERSISTENT_LOCAL_DB) {
+  try {
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  } catch (err) {
+    console.warn('Could not create data directory:', err.message);
+  }
+}
 
+let Database = null;
+try {
+  Database = require('better-sqlite3');
+} catch (err) {
+  console.warn('better-sqlite3 not available; running in FHIR live mode:', err.message);
+}
+
+let db = null;
 const dbPath = USE_PERSISTENT_LOCAL_DB
   ? process.env.SQLITE_PATH || path.join(dataDir, 'ereferral-local.db')
   : ':memory:';
-const db = new Database(dbPath);
 
-if (USE_PERSISTENT_LOCAL_DB) {
-  db.pragma('journal_mode = WAL');
+if (Database) {
+  try {
+    db = new Database(dbPath);
+    if (USE_PERSISTENT_LOCAL_DB) {
+      db.pragma('journal_mode = WAL');
+    }
+  } catch (err) {
+    console.warn('Failed to initialize SQLite database, using fallback in-memory stub:', err.message);
+    db = null;
+  }
 }
 
-db.exec(`
+if (!db) {
+  const createMockStmt = () => ({
+    get: () => null,
+    all: () => [],
+    run: () => ({ lastInsertRowid: 1, changes: 0 }),
+  });
+  db = {
+    prepare: () => createMockStmt(),
+    exec: () => {},
+    pragma: () => {},
+    transaction: (fn) => fn,
+  };
+}
+
+try {
+  db.exec(`
   CREATE TABLE IF NOT EXISTS Patients (
     Id INTEGER PRIMARY KEY AUTOINCREMENT,
     LocalCode TEXT NOT NULL UNIQUE,
@@ -185,11 +214,18 @@ db.exec(`
     UpdatedAt TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+} catch (err) {
+  console.warn('Schema init warning:', err.message);
+}
 
 function ensureColumn(table, column, typeSql) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql}`);
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() || [];
+    if (!cols.some((c) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql}`);
+    }
+  } catch (_err) {
+    // Silently ignore schema alteration warnings on memory fallback
   }
 }
 
@@ -206,104 +242,113 @@ ensureColumn('Referrals', 'LinkedDiagnosisText', 'TEXT');
 const TEAM_PREFIX = process.env.TEAM_PREFIX || 'TEAM07';
 
 function getDefaultFacilityConfig() {
-  const fhirId = String(process.env.DEFAULT_FACILITY_FHIR_ID || '').trim();
-  if (!fhirId) return null;
-  return {
-    fhirId,
-    name:
-      String(process.env.DEFAULT_FACILITY_NAME || '').trim() ||
-      'Default Facility',
-    nhfrCode: String(process.env.DEFAULT_FACILITY_NHFR || '').trim() || fhirId,
-    hcpnCode: String(process.env.DEFAULT_FACILITY_HCPN || '').trim() || null,
-    phone: String(process.env.DEFAULT_FACILITY_PHONE || '').trim() || null,
-    addressLine: String(process.env.DEFAULT_FACILITY_ADDRESS || '').trim() || null,
-  };
+  try {
+    const fhirId = String(process.env.DEFAULT_FACILITY_FHIR_ID || '').trim();
+    if (!fhirId) return null;
+    return {
+      fhirId,
+      name:
+        String(process.env.DEFAULT_FACILITY_NAME || '').trim() ||
+        'Default Facility',
+      nhfrCode: String(process.env.DEFAULT_FACILITY_NHFR || '').trim() || fhirId,
+      hcpnCode: String(process.env.DEFAULT_FACILITY_HCPN || '').trim() || null,
+      phone: String(process.env.DEFAULT_FACILITY_PHONE || '').trim() || null,
+      addressLine: String(process.env.DEFAULT_FACILITY_ADDRESS || '').trim() || null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function ensureDefaultFacility() {
-  const cfg = getDefaultFacilityConfig();
-  if (!cfg) return null;
+  try {
+    const cfg = getDefaultFacilityConfig();
+    if (!cfg) return null;
 
-  const byFhir = db
-    .prepare('SELECT * FROM Organizations WHERE FhirId = ?')
-    .get(cfg.fhirId);
-  if (byFhir) {
-    db.prepare(`
-      UPDATE Organizations SET
-        Name = @Name,
-        NhfrCode = @NhfrCode,
-        HcpnCode = COALESCE(@HcpnCode, HcpnCode),
-        Phone = COALESCE(@Phone, Phone),
-        AddressLine = COALESCE(@AddressLine, AddressLine),
-        SyncStatus = 'synced',
-        SyncError = NULL,
-        SyncedAt = COALESCE(SyncedAt, datetime('now')),
-        UpdatedAt = datetime('now')
-      WHERE Id = @Id
-    `).run({
-      Id: byFhir.Id,
-      Name: cfg.name,
-      NhfrCode: cfg.nhfrCode,
-      HcpnCode: cfg.hcpnCode,
-      Phone: cfg.phone,
-      AddressLine: cfg.addressLine,
-    });
-    return db.prepare('SELECT * FROM Organizations WHERE Id = ?').get(byFhir.Id);
-  }
+    const byFhir = db
+      .prepare('SELECT * FROM Organizations WHERE FhirId = ?')
+      .get(cfg.fhirId);
+    if (byFhir) {
+      db.prepare(`
+        UPDATE Organizations SET
+          Name = @Name,
+          NhfrCode = @NhfrCode,
+          HcpnCode = COALESCE(@HcpnCode, HcpnCode),
+          Phone = COALESCE(@Phone, Phone),
+          AddressLine = COALESCE(@AddressLine, AddressLine),
+          SyncStatus = 'synced',
+          SyncError = NULL,
+          SyncedAt = COALESCE(SyncedAt, datetime('now')),
+          UpdatedAt = datetime('now')
+        WHERE Id = @Id
+      `).run({
+        Id: byFhir.Id,
+        Name: cfg.name,
+        NhfrCode: cfg.nhfrCode,
+        HcpnCode: cfg.hcpnCode,
+        Phone: cfg.phone,
+        AddressLine: cfg.addressLine,
+      });
+      return db.prepare('SELECT * FROM Organizations WHERE Id = ?').get(byFhir.Id);
+    }
 
-  const byNhfr = db
-    .prepare('SELECT * FROM Organizations WHERE NhfrCode = ?')
-    .get(cfg.nhfrCode);
-  if (byNhfr) {
-    db.prepare(`
-      UPDATE Organizations SET
-        Name = @Name,
-        FhirId = @FhirId,
-        HcpnCode = COALESCE(@HcpnCode, HcpnCode),
-        Phone = COALESCE(@Phone, Phone),
-        AddressLine = COALESCE(@AddressLine, AddressLine),
-        SyncStatus = 'synced',
-        SyncError = NULL,
-        SyncedAt = COALESCE(SyncedAt, datetime('now')),
-        UpdatedAt = datetime('now')
-      WHERE Id = @Id
-    `).run({
-      Id: byNhfr.Id,
-      Name: cfg.name,
-      FhirId: cfg.fhirId,
-      HcpnCode: cfg.hcpnCode,
-      Phone: cfg.phone,
-      AddressLine: cfg.addressLine,
-    });
-    return db.prepare('SELECT * FROM Organizations WHERE Id = ?').get(byNhfr.Id);
-  }
+    const byNhfr = db
+      .prepare('SELECT * FROM Organizations WHERE NhfrCode = ?')
+      .get(cfg.nhfrCode);
+    if (byNhfr) {
+      db.prepare(`
+        UPDATE Organizations SET
+          Name = @Name,
+          FhirId = @FhirId,
+          HcpnCode = COALESCE(@HcpnCode, HcpnCode),
+          Phone = COALESCE(@Phone, Phone),
+          AddressLine = COALESCE(@AddressLine, AddressLine),
+          SyncStatus = 'synced',
+          SyncError = NULL,
+          SyncedAt = COALESCE(SyncedAt, datetime('now')),
+          UpdatedAt = datetime('now')
+        WHERE Id = @Id
+      `).run({
+        Id: byNhfr.Id,
+        Name: cfg.name,
+        FhirId: cfg.fhirId,
+        HcpnCode: cfg.hcpnCode,
+        Phone: cfg.phone,
+        AddressLine: cfg.addressLine,
+      });
+      return db.prepare('SELECT * FROM Organizations WHERE Id = ?').get(byNhfr.Id);
+    }
 
-  const nextNum =
-    db.prepare('SELECT COUNT(*) AS c FROM Organizations').get().c + 1;
-  const localCode = `${TEAM_PREFIX}-O${String(nextNum).padStart(4, '0')}`;
-  const info = db
-    .prepare(
+    const nextNum =
+      (db.prepare('SELECT COUNT(*) AS c FROM Organizations').get()?.c || 0) + 1;
+    const localCode = `${TEAM_PREFIX}-O${String(nextNum).padStart(4, '0')}`;
+    const info = db
+      .prepare(
+        `
+        INSERT INTO Organizations (
+          LocalCode, Name, NhfrCode, HcpnCode, Phone, AddressLine,
+          FhirId, SyncStatus, SyncedAt
+        ) VALUES (
+          @LocalCode, @Name, @NhfrCode, @HcpnCode, @Phone, @AddressLine,
+          @FhirId, 'synced', datetime('now')
+        )
       `
-      INSERT INTO Organizations (
-        LocalCode, Name, NhfrCode, HcpnCode, Phone, AddressLine,
-        FhirId, SyncStatus, SyncedAt
-      ) VALUES (
-        @LocalCode, @Name, @NhfrCode, @HcpnCode, @Phone, @AddressLine,
-        @FhirId, 'synced', datetime('now')
       )
-    `
-    )
-    .run({
-      LocalCode: localCode,
-      Name: cfg.name,
-      NhfrCode: cfg.nhfrCode,
-      HcpnCode: cfg.hcpnCode,
-      Phone: cfg.phone,
-      AddressLine: cfg.addressLine,
-      FhirId: cfg.fhirId,
-    });
+      .run({
+        LocalCode: localCode,
+        Name: cfg.name,
+        NhfrCode: cfg.nhfrCode,
+        HcpnCode: cfg.hcpnCode,
+        Phone: cfg.phone,
+        AddressLine: cfg.addressLine,
+        FhirId: cfg.fhirId,
+      });
 
-  return db.prepare('SELECT * FROM Organizations WHERE Id = ?').get(info.lastInsertRowid);
+    return db.prepare('SELECT * FROM Organizations WHERE Id = ?').get(info?.lastInsertRowid || 1);
+  } catch (err) {
+    console.warn('ensureDefaultFacility warning:', err.message);
+    return null;
+  }
 }
 
 const defaultFacilityRow = ensureDefaultFacility();

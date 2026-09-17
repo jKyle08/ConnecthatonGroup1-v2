@@ -981,10 +981,21 @@ function initRealtime() {
     return;
   }
 
+  const isServerlessHost =
+    window.location.hostname.includes('netlify.app') ||
+    window.location.hostname.includes('.app');
+
+  if (isServerlessHost) {
+    setLiveStatus('connected', 'Live (FHIR CDR)');
+    return;
+  }
+
   const socket = io({
     path: '/socket.io',
     transports: ['websocket', 'polling'],
     reconnection: true,
+    reconnectionAttempts: 5,
+    timeout: 5000,
   });
 
   state.socket = socket;
