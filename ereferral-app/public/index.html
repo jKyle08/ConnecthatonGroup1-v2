@@ -1,0 +1,1431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eReferral - DOH Connectathon</title>
+  <link rel="icon" type="image/png" href="/img/favicon.png" />
+  <link rel="apple-touch-icon" href="/img/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" />
+  <link rel="stylesheet" href="/css/styles.css?v=entity-quick-modals-1" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="app-header-brand">
+        <img class="app-header-logo" src="/img/logo.png?v=transparent-1" alt="eReferral" />
+        <div class="app-header-titles">
+          <strong class="app-header-title">eReferral</strong>
+          <span class="app-header-sub">DOH Connectathon - Philippine Health Information Exchange</span>
+        </div>
+      </div>
+
+      <div class="app-header-tools">
+        <div class="status-pills">
+          <div class="pill pill-on-dark">
+            <span class="dot" id="fhirDot"></span>
+            FHIR: <strong id="fhirStatus">Checking…</strong>
+          </div>
+        </div>
+        <div class="user-box">
+          <span class="avatar avatar-icon" aria-hidden="true">
+            <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="20" cy="20" r="20" fill="#fff"/>
+              <path d="M12 28V16.5c0-.8.7-1.5 1.5-1.5H18v-2.2c0-.7.6-1.3 1.3-1.3h1.4c.7 0 1.3.6 1.3 1.3V15h4.5c.8 0 1.5.7 1.5 1.5V28" stroke="#0b3a6e" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M16 19.5h2M16 22.5h2M22 19.5h2M22 22.5h2M19 28v-3.5c0-.6.4-1 1-1h0c.6 0 1 .4 1 1V28" stroke="#0b3a6e" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <div class="user-meta">
+            <strong id="teamLabel">Connectathon Facility</strong>
+            <small class="user-facility-chip" id="teamChip">Connectathon Team</small>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <nav class="app-nav" id="mainNav" aria-label="Primary">
+      <div class="app-nav-scroll">
+        <button type="button" data-view="dashboard" class="active">
+          <span class="nav-label">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"/></svg>
+            Dashboard
+          </span>
+        </button>
+        <button type="button" data-view="patients">
+          <span class="nav-label">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm0 2c-4.4 0-8 2.2-8 5v1h16v-1c0-2.8-3.6-5-8-5Z"/></svg>
+            Patients
+          </span>
+        </button>
+
+        <div class="nav-dd" data-nav-group="referral">
+          <button type="button" class="nav-dd-trigger" aria-expanded="false" aria-haspopup="true">
+            <span class="nav-label">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm8 1.5V9h4.5L14 4.5ZM8 12h8v1.5H8V12Zm0 3.5h8V17H8v-1.5Zm0-7h5V10H8V8.5Z"/></svg>
+              Referral
+            </span>
+            <span class="badge nav-dd-badge" id="inboxBadge" hidden>0</span>
+            <svg class="nav-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5H7Z"/></svg>
+          </button>
+          <div class="nav-dd-menu" role="menu">
+            <button type="button" role="menuitem" data-view="new-referral">Generate Referral</button>
+            <button type="button" role="menuitem" data-view="inbox">
+              Incoming Referral
+              <span class="badge badge-inline" id="inboxBadgeMenu" hidden>0</span>
+            </button>
+            <button type="button" role="menuitem" data-view="sent">Sent Referrals</button>
+          </div>
+        </div>
+
+        <button type="button" data-view="organizations">
+          <span class="nav-label">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V6h7v14H4Zm9 0V3h7v17h-7ZM6 8h3v2H6V8Zm0 4h3v2H6v-2Zm9-5h3v2h-3V7Zm0 4h3v2h-3v-2Zm0 4h3v2h-3v-2Z"/></svg>
+            Organizations
+          </span>
+        </button>
+        <button type="button" data-view="practitioners">
+          <span class="nav-label">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm0 2c-4.4 0-8 2.2-8 5v1h16v-1c0-2.8-3.6-5-8-5Z"/></svg>
+            Practitioners
+          </span>
+        </button>
+        <button type="button" data-view="practitioner-roles">
+          <span class="nav-label">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v5H4V4Zm9 0h7v9h-7V4ZM4 11h7v9H4v-9Zm9 5h7v4h-7v-4Z"/></svg>
+            Practitioner Roles
+          </span>
+        </button>
+        <button type="button" data-view="sync">
+          <span class="nav-label">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6V3L8 7l4 4V8a4 4 0 1 1-4 4H6a6 6 0 1 0 6-6Zm0 12v3l4-4-4-4v3a4 4 0 1 1 4-4h2a6 6 0 1 0-6 6Z"/></svg>
+            Sync
+          </span>
+        </button>
+        <button type="button" data-view="help">
+          <span class="nav-label">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Zm0 14.2a1.2 1.2 0 1 1 1.2-1.2A1.2 1.2 0 0 1 12 17.2Zm1.5-4.4-.4.2a1 1 0 0 0-.6.9h-1.2a2.2 2.2 0 0 1 1.3-2l.7-.3a1.2 1.2 0 1 0-1.8-1 1 1 0 0 1-1-.9 3.2 3.2 0 1 1 3 4.1Z"/></svg>
+            Help
+          </span>
+        </button>
+      </div>
+    </nav>
+
+    <main class="content">
+        <!-- DASHBOARD -->
+        <section class="view active" id="view-dashboard">
+          <div class="dash">
+            <header class="dash-head">
+              <div class="dash-head-copy">
+                <p class="dash-kicker">DOH Connectathon - Region 12</p>
+                <h2>eReferral desk</h2>
+                <p class="dash-date" id="welcomeDate">Loading…</p>
+                <p class="dash-lede">Patient registry, facility referrals, and FHIR sync for the DOH Connectathon.</p>
+              </div>
+              <div class="dash-head-actions">
+                <button class="btn btn-primary" type="button" data-view="patient-form">Register patient</button>
+                <button class="btn btn-secondary" type="button" data-view="new-referral">New referral</button>
+              </div>
+            </header>
+
+            <p class="dash-notice" role="note">
+              <strong>Data safety:</strong>
+              Use your team’s unique PhilSys / PhilHealth / NHFR / PRC identifiers.
+              Do not modify or delete pre-seeded demo FHIR resources. FHIR is the source of truth while local DB sync is disabled.
+            </p>
+
+            <div class="dash-tally" aria-label="Dashboard summary counts">
+              <button class="dash-tally-item" type="button" data-view="patients">
+                <span class="dash-tally-value" id="countPatients">0</span>
+                <span class="dash-tally-label">Patients</span>
+              </button>
+              <button class="dash-tally-item" type="button" data-view="sync">
+                <span class="dash-tally-value" id="countSynced">0</span>
+                <span class="dash-tally-label">Synced</span>
+              </button>
+              <button class="dash-tally-item" type="button" data-view="sync">
+                <span class="dash-tally-value" id="countPendingSync">0</span>
+                <span class="dash-tally-label">Pending sync</span>
+              </button>
+              <button class="dash-tally-item" type="button" data-view="organizations">
+                <span class="dash-tally-value" id="countOrganizations">0</span>
+                <span class="dash-tally-label">Organizations</span>
+              </button>
+              <button class="dash-tally-item" type="button" data-view="inbox">
+                <span class="dash-tally-value" id="countInbox">0</span>
+                <span class="dash-tally-label">Incoming</span>
+              </button>
+              <button class="dash-tally-item" type="button" data-view="sent">
+                <span class="dash-tally-value" id="countSent">0</span>
+                <span class="dash-tally-label">Sent</span>
+              </button>
+            </div>
+
+            <div class="dash-layout">
+              <section class="dash-activity" aria-labelledby="dashActivityTitle">
+                <div class="dash-section-head">
+                  <h3 id="dashActivityTitle">Recent activity</h3>
+                  <p>Local writes and FHIR sync events</p>
+                </div>
+                <div class="activity-feed" id="activityBody" role="list">
+                  <p class="placeholder">No activity yet</p>
+                </div>
+              </section>
+
+              <aside class="dash-rail">
+                <section class="dash-rail-block" aria-labelledby="dashSystemTitle">
+                  <h3 id="dashSystemTitle">System</h3>
+                  <dl class="dash-status-list">
+                    <div>
+                      <dt>Local database</dt>
+                      <dd><span class="dot" id="dbDotCard"></span> <strong id="dbStatusCard">-</strong></dd>
+                    </div>
+                    <div>
+                      <dt>FHIR server</dt>
+                      <dd><span class="dot" id="fhirDotCard"></span> <strong id="fhirStatusCard">-</strong></dd>
+                    </div>
+                  </dl>
+                  <p class="dash-checked">Checked <span id="lastChecked">-</span></p>
+                  <div class="dash-sync-row">
+                    <div>
+                      <span class="num" id="metricPending">0</span>
+                      <span class="lbl">Pending</span>
+                    </div>
+                    <div>
+                      <span class="num" id="metricFailed">0</span>
+                      <span class="lbl">Failed</span>
+                    </div>
+                    <div>
+                      <span class="num" id="metricSynced">0</span>
+                      <span class="lbl">Synced</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="dash-rail-block" aria-labelledby="dashReferralTitle">
+                  <h3 id="dashReferralTitle">Referrals</h3>
+                  <ul class="dash-ref-list">
+                    <li><span>Received</span><strong id="refReceived">0</strong></li>
+                    <li><span>Accepted</span><strong id="refAccepted">0</strong></li>
+                    <li><span>Pending</span><strong id="refPending">0</strong></li>
+                    <li><span>Rejected</span><strong id="refRejected">0</strong></li>
+                  </ul>
+                </section>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <!-- PATIENTS LIST -->
+        <section class="view" id="view-patients">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2>Patients</h2>
+              <p id="patientsSubtitle">Local registry with FHIR sync status</p>
+            </div>
+            <button class="btn btn-primary" type="button" data-view="patient-form" id="registerPatientBtn">Register Patient</button>
+          </div>
+
+          <div class="card">
+            <div class="table-toolbar">
+              <form id="patientSearchForm" class="search-bar" autocomplete="off">
+                <input
+                  id="patientSearchInput"
+                  type="search"
+                  name="q"
+                  placeholder="Search name, PhilSys, FHIR ID…"
+                  aria-label="Search patients"
+                />
+                <button class="btn btn-secondary" type="submit">Search</button>
+                <button class="btn btn-secondary" type="button" id="patientSearchClear">Clear</button>
+              </form>
+              <div class="table-meta" id="patientsMeta">-</div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>FHIR ID</th>
+                    <th>Name</th>
+                    <th>PhilSys</th>
+                    <th>PhilHealth ID</th>
+                    <th>Birth Date</th>
+                    <th class="col-actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="patientsBody">
+                  <tr><td colspan="6" class="placeholder">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="pager" id="patientsPager">
+              <button class="btn btn-secondary" type="button" id="patientsPrev" disabled>Previous</button>
+              <span id="patientsPageLabel">Page 1 of 1</span>
+              <button class="btn btn-secondary" type="button" id="patientsNext" disabled>Next</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- PATIENT FORM -->
+        <section class="view" id="view-patient-form">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2 id="patientFormTitle">Register Patient</h2>
+              <p id="patientFormSubtitle">Saved locally, then synced to FHIR</p>
+            </div>
+            <button class="btn btn-secondary" type="button" data-view="patients">Back to list</button>
+          </div>
+
+          <form class="card" id="patientForm" novalidate>
+            <input type="hidden" name="editId" id="patientEditId" value="" />
+            <input type="hidden" name="editFhirId" id="patientEditFhirId" value="" />
+
+            <div class="alert" id="patientFormAlert" style="margin-bottom: 1rem;">
+              Use unique team identifiers only. Do not reuse seeded demo PhilSys / PhilHealth IDs.
+            </div>
+
+            <div class="section-title">Identifiers</div>
+            <div class="form-grid">
+              <label>PhilSys ID *
+                <input name="philsysId" required placeholder="e.g. 1207-TEAM07-0001" />
+              </label>
+              <label>PhilHealth ID
+                <input name="philhealthId" placeholder="e.g. 12-TEAM07001-1" />
+              </label>
+            </div>
+
+            <div class="section-title">Demographics</div>
+            <div class="form-grid">
+              <label>Family Name *
+                <input name="familyName" required />
+              </label>
+              <label>Given Name *
+                <input name="givenName1" required />
+              </label>
+              <label>Middle / 2nd Given
+                <input name="givenName2" />
+              </label>
+              <label>Gender *
+                <select name="gender" required data-placeholder="Select gender...">
+                  <option value="">Select gender...</option>
+                  <option value="female">female</option>
+                  <option value="male">male</option>
+                  <option value="other">other</option>
+                  <option value="unknown">unknown</option>
+                </select>
+              </label>
+              <label>Birth Date *
+                <input type="date" name="birthDate" required />
+              </label>
+              <label>Mobile Phone
+                <input name="phone" placeholder="+63-9xx-xxx-xxxx" />
+              </label>
+            </div>
+
+            <div class="section-title">Address (PSGC)</div>
+            <div class="form-grid psgc-address" data-psgc-form="patient">
+              <label class="full">Street / Address Line
+                <input name="addressLine" placeholder="House no., street, sitio" />
+              </label>
+
+              <label>Region
+                <select class="psgc-select" data-psgc-level="region" data-placeholder="Search region..."></select>
+              </label>
+              <label>Province / HUC
+                <select class="psgc-select" data-psgc-level="province" data-placeholder="Select province or HUC..."></select>
+              </label>
+
+              <label>City / Municipality
+                <select class="psgc-select" data-psgc-level="city" data-placeholder="Select city or municipality..."></select>
+              </label>
+              <label>Barangay
+                <select class="psgc-select" data-psgc-level="barangay" data-placeholder="Select barangay..."></select>
+              </label>
+
+              <div class="psgc-hidden" aria-hidden="true">
+                <input type="hidden" name="postalCode" />
+                <input type="hidden" name="regionCode" />
+                <input type="hidden" name="regionDisplay" />
+                <input type="hidden" name="provinceCode" />
+                <input type="hidden" name="provinceDisplay" />
+                <input type="hidden" name="cityCode" />
+                <input type="hidden" name="cityDisplay" />
+                <input type="hidden" name="barangayCode" />
+                <input type="hidden" name="barangayDisplay" />
+              </div>
+            </div>
+
+            <div class="section-title">Next of Kin</div>
+            <div class="form-grid">
+              <label>Family Name
+                <input name="nextOfKinFamily" />
+              </label>
+              <label>Given Name
+                <input name="nextOfKinGiven" />
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn btn-secondary" type="button" data-view="patients">Cancel</button>
+              <button class="btn btn-primary" type="submit" id="savePatientBtn">Save</button>
+            </div>
+          </form>
+        </section>
+
+        <!-- NEW REFERRAL -->
+        <section class="view" id="view-new-referral">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2>Generate Referral</h2>
+              <p>Builds a FHIR transaction Bundle (ServiceRequest + Task + clinical context)</p>
+            </div>
+            <button class="btn btn-primary" type="button" data-view="sent">View sent</button>
+          </div>
+
+          <form class="card" id="referralForm" novalidate>
+            <div class="section-title">Patient &amp; parties</div>
+            <div class="form-grid">
+              <label class="full">Patient *
+                <input type="hidden" name="patientId" id="referralPatientId" value="" />
+                <input type="hidden" name="patientFhirId" id="referralPatientFhirId" required value="" />
+                <div class="patient-picker" id="referralPatientPicker">
+                  <button type="button" class="btn btn-primary patient-picker-trigger" id="referralPatientPickBtn">
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-7.5 8a7.5 7.5 0 0 1 15 0v1H4.5v-1Z"/>
+                      <path d="M16.6 15.4a4.2 4.2 0 1 1 0 2.4l1.7 1.7 1.1-1.1-1.7-1.7a4.2 4.2 0 0 1-1.1-1.3Zm1.1 1.2a2.7 2.7 0 1 0-2.7 2.7 2.7 2.7 0 0 0 2.7-2.7Z"/>
+                    </svg>
+                    Select Patient
+                  </button>
+                  <div class="patient-summary" id="referralPatientSelected" hidden>
+                    <div class="patient-summary-top">
+                      <div class="patient-summary-avatar" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                          <path d="M12 12a4.5 4.5 0 1 0-4.5-4.5A4.5 4.5 0 0 0 12 12Zm0 2.2c-4.2 0-7.8 2.1-7.8 4.8V21h15.6v-2c0-2.7-3.6-4.8-7.8-4.8Z"/>
+                        </svg>
+                      </div>
+                      <div class="patient-summary-identity">
+                        <h3 id="referralPatientName">-</h3>
+                        <div class="patient-summary-badges" id="referralPatientBadges"></div>
+                        <p class="patient-summary-address" id="referralPatientAddress" hidden></p>
+                      </div>
+                      <button type="button" class="btn btn-secondary patient-summary-change" id="referralPatientChangeBtn">Change</button>
+                    </div>
+                    <dl class="patient-summary-meta" id="referralPatientMetaRow">
+                      <div>
+                        <dt>Sex</dt>
+                        <dd id="referralPatientSex">-</dd>
+                      </div>
+                      <div>
+                        <dt>Age</dt>
+                        <dd id="referralPatientAge">-</dd>
+                      </div>
+                      <div>
+                        <dt>Birth Date</dt>
+                        <dd id="referralPatientBirth">-</dd>
+                      </div>
+                      <div>
+                        <dt>PhilSys</dt>
+                        <dd id="referralPatientPhilsys">-</dd>
+                      </div>
+                      <div>
+                        <dt>PhilHealth</dt>
+                        <dd id="referralPatientPhilhealth">-</dd>
+                      </div>
+                      <div>
+                        <dt>FHIR ID</dt>
+                        <dd id="referralPatientFhir">-</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
+              </label>
+              <label>Sending facility *
+                <select name="sendingOrgFhirId" id="referralSendingOrgId" required>
+                  <option value="">Loading facilities…</option>
+                </select>
+              </label>
+              <label>Receiving facility *
+                <select name="receivingOrgFhirId" id="referralReceivingOrgId" required>
+                  <option value="">Loading facilities…</option>
+                </select>
+              </label>
+              <label>Sending practitioner role *
+                <select name="sendingPracRoleFhirId" id="referralSendingPracId" required>
+                  <option value="">Loading practitioner roles…</option>
+                </select>
+              </label>
+              <label>Receiving practitioner role *
+                <select name="receivingPracRoleFhirId" id="referralReceivingPracId" required>
+                  <option value="">Loading practitioner roles…</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="section-title">Referral details</div>
+            <div class="form-grid">
+              <label>Referral Priority *
+                <select name="categoryCode" id="referralCategoryCode" required>
+                  <option value="">Loading referral priorities…</option>
+                </select>
+              </label>
+              <label>Reason type *
+                <select name="reasonCode" id="referralReasonCode" required>
+                  <option value="71388002">Procedure / intervention</option>
+                  <option value="11429006">Consultation</option>
+                  <option value="165197003">Diagnostics</option>
+                  <option value="3457005">General referral</option>
+                </select>
+              </label>
+              <label>Date &amp; time of referral *
+                <input type="datetime-local" name="dateOfReferralLocal" id="referralDateLocal" required />
+              </label>
+              <label class="full">Reason for referral *
+                <textarea name="reasonText" id="referralReasonText" rows="2" required placeholder="Why is this patient being referred?"></textarea>
+              </label>
+            </div>
+
+            <div class="section-title">Clinical summary</div>
+            <div class="form-grid">
+              <label class="full">Chief complaint *
+                <textarea name="chiefComplaint" rows="2" required></textarea>
+              </label>
+              <label class="full">Working Impression (Diagnosis) *
+                <select id="referralWorkingImpressionDx" class="diagnosis-select" data-placeholder="Type a diagnosis, e.g. headache or pre-eclampsia...">
+                  <option value=""></option>
+                </select>
+                <input type="hidden" name="workingImpressionCode" id="referralWorkingImpressionCode" />
+                <input type="hidden" name="workingImpressionDisplay" id="referralWorkingImpressionDisplay" />
+                <input type="hidden" name="workingImpression" id="referralWorkingImpressionText" />
+                <span class="muted" style="font-size:0.78rem;display:block;margin-top:0.35rem;">Type at least 2 letters. Each result shows the diagnosis name, SNOMED CT code, and clinical finding tag.</span>
+              </label>
+              <label class="full">Clinical history
+                <textarea name="clinicalHistory" rows="2" placeholder="Relevant history, AOG, comorbidities…"></textarea>
+              </label>
+              <label class="full">Treatment given
+                <textarea name="treatmentGiven" rows="2" placeholder="Pre-referral medications / interventions"></textarea>
+              </label>
+              <label class="full">Lab / diagnostics conclusion
+                <textarea name="labConclusion" rows="2" placeholder="Optional laboratory summary"></textarea>
+              </label>
+            </div>
+
+            <div class="section-title">Vitals (optional)</div>
+            <div class="form-grid">
+              <label>BP systolic
+                <input type="number" name="bpSystolic" min="0" step="1" placeholder="mmHg" />
+              </label>
+              <label>BP diastolic
+                <input type="number" name="bpDiastolic" min="0" step="1" placeholder="mmHg" />
+              </label>
+              <label>Heart rate
+                <input type="number" name="heartRate" min="0" step="1" placeholder="/min" />
+              </label>
+              <label>Respiratory rate
+                <input type="number" name="respiratoryRate" min="0" step="1" placeholder="/min" />
+              </label>
+              <label>Temperature
+                <input type="number" name="temperature" min="30" max="45" step="0.1" placeholder="°C" />
+              </label>
+              <label>Weight
+                <input type="number" name="weight" min="0" step="0.1" placeholder="kg" />
+              </label>
+            </div>
+
+            <div class="section-title">ServiceRequest note</div>
+            <div class="form-grid">
+              <label class="full">ServiceRequest note
+                <textarea name="referralNote" rows="2" placeholder="Summary for receiving facility"></textarea>
+              </label>
+            </div>
+
+            <div class="section-title">Workflow task &amp; routing</div>
+            <div class="form-grid">
+              <label class="full">Task note / comments
+                <textarea
+                  name="taskNote"
+                  rows="2"
+                  placeholder="e.g. New referral for patient with severe symptoms. Awaiting response."
+                ></textarea>
+              </label>
+            </div>
+
+            <div class="form-actions referral-form-actions">
+              <button class="btn btn-secondary" type="button" data-view="dashboard">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/>
+                </svg>
+                Cancel
+              </button>
+              <div class="referral-form-actions-right">
+                <button class="btn btn-secondary" type="button" id="previewReferralBundleBtn">
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8.2 7.2 4.8 12l3.4 4.8 1.6-1.1L7.4 12l2.4-3.7-1.6-1.1Zm7.6 0-1.6 1.1L16.6 12l-2.4 3.7 1.6 1.1L19.2 12l-3.4-4.8Z"/>
+                  </svg>
+                  Preview FHIR Bundle
+                </button>
+                <button class="btn btn-primary" type="submit" id="submitReferralBtn">
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3.2 11.2 20.1 3.5l-3.2 16.8-5.2-4.7-3.3 3.2.7-4.9 8.4-7.5-10.3 4.8Z"/>
+                  </svg>
+                  Submit Referral
+                </button>
+              </div>
+            </div>
+          </form>
+        </section>
+        <section class="view" id="view-inbox">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2>Incoming Referrals</h2>
+              <p>Live inbound Tasks from FHIR (ServiceRequest + Task package)</p>
+            </div>
+            <div class="form-actions" style="margin:0;">
+              <button class="btn btn-primary" type="button" id="btnRefreshInboxLocal">Refresh from FHIR</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="inbox-toolbar">
+              <form id="inboxSearchForm" class="inbox-controls" autocomplete="off">
+                <input
+                  id="inboxSearch"
+                  type="search"
+                  name="q"
+                  placeholder="Search patient, facility, requisition, Task ID…"
+                  aria-label="Search incoming referrals"
+                />
+                <select id="inboxStatusFilter" aria-label="Status filter">
+                  <option value="all">All statuses</option>
+                  <option value="requested">requested</option>
+                  <option value="received">received</option>
+                  <option value="accepted">accepted</option>
+                  <option value="rejected">rejected</option>
+                  <option value="in-progress">in-progress</option>
+                  <option value="completed">completed</option>
+                </select>
+                <select id="inboxReceivingFacilityFilter" aria-label="Receiving facility">
+                  <option value="">All receiving facilities</option>
+                </select>
+                <div class="inbox-actions">
+                  <button class="btn btn-primary" type="submit" id="inboxSearchBtn">Search</button>
+                  <button class="btn btn-secondary" type="button" id="inboxSearchClear">Clear</button>
+                </div>
+              </form>
+              <div class="table-meta inbox-meta" id="inboxMeta">-</div>
+            </div>
+
+            <div class="table-wrap inbox-table-wrap">
+              <table class="data-table inbox-table">
+                <thead>
+                  <tr>
+                    <th>Referral ID</th>
+                    <th>Patient</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Category</th>
+                    <th>Status</th>
+                    <th>When</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="inboxBody">
+                  <tr class="placeholder-row"><td colspan="8" class="placeholder">Loading incoming referrals...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="pager" id="inboxPager">
+              <button class="btn btn-secondary" type="button" id="inboxPrev" disabled>Previous</button>
+              <span id="inboxPageLabel">Page 1 of 1</span>
+              <button class="btn btn-secondary" type="button" id="inboxNext" disabled>Next</button>
+            </div>
+          </div>
+        </section>
+        <section class="view" id="view-sent">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2>Sent Referrals</h2>
+              <p>Outbound referrals from this facility</p>
+            </div>
+            <div class="form-actions" style="margin:0;">
+              <button class="btn btn-primary" type="button" id="btnRefreshSent">Refresh</button>
+              <button class="btn btn-primary" type="button" data-view="new-referral">New referral</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-toolbar">
+              <form id="sentSearchForm" class="search-bar" autocomplete="off">
+                <input
+                  id="sentSearch"
+                  type="search"
+                  name="q"
+                  placeholder="Search patient, facility, requisition…"
+                  aria-label="Search sent referrals"
+                />
+                <button class="btn btn-secondary" type="submit">Search</button>
+                <button class="btn btn-secondary" type="button" id="sentSearchClear">Clear</button>
+              </form>
+              <div class="table-meta" id="sentMeta">-</div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Local</th>
+                    <th>Patient</th>
+                    <th>To</th>
+                    <th>Category</th>
+                    <th>Task</th>
+                    <th>FHIR</th>
+                    <th>When</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="sentBody">
+                  <tr><td colspan="8" class="placeholder">No sent referrals yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+        <section class="view" id="view-organizations">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2>Organizations</h2>
+              <p id="organizationsSubtitle">Facility registry with FHIR sync status</p>
+            </div>
+            <div class="form-actions" style="margin:0;">
+              <button class="btn btn-teal" type="button" id="btnRefreshOrgs">Refresh from FHIR</button>
+              <button class="btn btn-primary" type="button" data-view="organization-form">Add Organization</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-toolbar">
+              <form id="orgSearchForm" class="search-bar" autocomplete="off">
+                <input
+                  id="orgSearch"
+                  type="search"
+                  name="q"
+                  placeholder="Search name, NHFR, FHIR ID…"
+                  aria-label="Search organizations"
+                />
+                <button class="btn btn-secondary" type="submit">Search</button>
+                <button class="btn btn-secondary" type="button" id="orgSearchClear">Clear</button>
+              </form>
+              <div class="table-meta" id="organizationsMeta">-</div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>FHIR ID</th>
+                    <th>Name</th>
+                    <th>NHFR</th>
+                    <th>HCPN</th>
+                    <th>Phone</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="organizationsBody">
+                  <tr><td colspan="6" class="placeholder">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="pager" id="organizationsPager">
+              <button class="btn btn-secondary" type="button" id="organizationsPrev" disabled>Previous</button>
+              <span id="organizationsPageLabel">Page 1 of 1</span>
+              <button class="btn btn-secondary" type="button" id="organizationsNext" disabled>Next</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-organization-form">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2 id="organizationFormTitle">Add Organization</h2>
+              <p id="organizationFormSubtitle">Saved locally, then PUT to FHIR by NHFR identifier</p>
+            </div>
+            <button class="btn btn-secondary" type="button" data-view="organizations">Back to list</button>
+          </div>
+
+          <form class="card" id="organizationForm" novalidate>
+            <input type="hidden" name="editId" id="organizationEditId" value="" />
+            <input type="hidden" name="editFhirId" id="organizationEditFhirId" value="" />
+
+            <div class="alert" id="organizationFormAlert" style="margin-bottom: 1rem;">
+              Use your team's unique NHFR / HCPN identifiers. Do not overwrite seeded demo facilities.
+            </div>
+
+            <div class="section-title">Facility</div>
+            <div class="form-grid">
+              <label class="full">Organization Name *
+                <input name="name" required placeholder="e.g. Regional Hospital - TEAM07" />
+              </label>
+              <label>NHFR Code *
+                <input name="nhfrCode" required placeholder="e.g. TEAM07-NHFR-0001" />
+              </label>
+              <label>HCPN
+                <input name="hcpnCode" placeholder="e.g. Regional HCPN" />
+              </label>
+              <label>Phone
+                <input name="phone" placeholder="+63-83-xxx-xxxx" />
+              </label>
+            </div>
+
+            <div class="section-title">Address (PSGC)</div>
+            <div class="form-grid psgc-address" data-psgc-form="organization">
+              <label class="full">Street / Address Line
+                <input name="addressLine" placeholder="Building, street, sitio" />
+              </label>
+
+              <label>Region
+                <select class="psgc-select" data-psgc-level="region" data-placeholder="Search region..."></select>
+              </label>
+              <label>Province / HUC
+                <select class="psgc-select" data-psgc-level="province" data-placeholder="Select province or HUC..."></select>
+              </label>
+
+              <label>City / Municipality
+                <select class="psgc-select" data-psgc-level="city" data-placeholder="Select city or municipality..."></select>
+              </label>
+              <label>Barangay
+                <select class="psgc-select" data-psgc-level="barangay" data-placeholder="Select barangay..."></select>
+              </label>
+
+              <div class="psgc-hidden" aria-hidden="true">
+                <input type="hidden" name="postalCode" />
+                <input type="hidden" name="regionCode" />
+                <input type="hidden" name="regionDisplay" />
+                <input type="hidden" name="provinceCode" />
+                <input type="hidden" name="provinceDisplay" />
+                <input type="hidden" name="cityCode" />
+                <input type="hidden" name="cityDisplay" />
+                <input type="hidden" name="barangayCode" />
+                <input type="hidden" name="barangayDisplay" />
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn btn-secondary" type="button" data-view="organizations">Cancel</button>
+              <button class="btn btn-primary" type="submit" id="saveOrganizationBtn">Save</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="view" id="view-practitioners">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2>Practitioner Directory</h2>
+              <p id="practitionersSubtitle">Manage healthcare practitioners, doctors, and PRC license identifiers</p>
+            </div>
+            <div class="form-actions" style="margin:0;">
+              <button class="btn btn-teal" type="button" id="btnRefreshPracs">Refresh from FHIR</button>
+              <button class="btn btn-primary" type="button" id="btnOpenPractitionerModal">+ Add Practitioner</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-toolbar">
+              <form id="pracSearchForm" class="search-bar" autocomplete="off">
+                <input
+                  id="pracSearch"
+                  type="search"
+                  name="q"
+                  placeholder="Search name, PRC, FHIR ID…"
+                  aria-label="Search practitioners"
+                />
+                <button class="btn btn-secondary" type="submit">Search</button>
+                <button class="btn btn-secondary" type="button" id="pracSearchClear">Clear</button>
+              </form>
+              <div class="table-meta" id="practitionersMeta">-</div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>FHIR ID</th>
+                    <th>Name</th>
+                    <th>PRC ID</th>
+                    <th>Role</th>
+                    <th>Phone</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="practitionersBody">
+                  <tr><td colspan="6" class="placeholder">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="pager" id="practitionersPager">
+              <button class="btn btn-secondary" type="button" id="practitionersPrev" disabled>Previous</button>
+              <span id="practitionersPageLabel">Page 1 of 1</span>
+              <button class="btn btn-secondary" type="button" id="practitionersNext" disabled>Next</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-practitioner-form" hidden>
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2 id="practitionerFormTitle">Add Practitioner</h2>
+              <p id="practitionerFormSubtitle">Saved locally, then PUT to FHIR by PRC identifier</p>
+            </div>
+            <button class="btn btn-secondary" type="button" data-view="practitioners">Back to list</button>
+          </div>
+
+          <form class="card" id="practitionerForm" novalidate>
+            <input type="hidden" name="editId" id="practitionerEditId" value="" />
+            <input type="hidden" name="editFhirId" id="practitionerEditFhirId" value="" />
+
+            <div class="alert" id="practitionerFormAlert" style="margin-bottom: 1rem;">
+              Use your team's unique PRC license numbers. Do not overwrite seeded demo practitioners.
+            </div>
+
+            <div class="section-title">Clinician</div>
+            <div class="form-grid">
+              <label>Prefix
+                <input name="prefix" placeholder="e.g. Dr." />
+              </label>
+              <label>Given Name *
+                <input name="givenName" required placeholder="e.g. Juan" />
+              </label>
+              <label>Family Name *
+                <input name="familyName" required placeholder="e.g. Dela Cruz" />
+              </label>
+              <label>PRC License No. *
+                <input name="prcId" required placeholder="e.g. TEAM07-1122334" />
+              </label>
+              <label>Phone
+                <input name="phone" placeholder="+63-9xx-xxx-xxxx" />
+              </label>
+            </div>
+
+            <div class="section-title">Practitioner Role</div>
+            <div class="form-grid">
+              <label>Role Code *
+                <input name="roleCode" required placeholder="e.g. 158965000" />
+              </label>
+              <label>Role Display *
+                <input name="roleDisplay" required placeholder="e.g. Medical practitioner" />
+              </label>
+              <label class="full">Organization FHIR ID
+                <input name="organizationFhirId" placeholder="Optional Organization/{id} target id" />
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn btn-secondary" type="button" data-view="practitioners">Cancel</button>
+              <button class="btn btn-primary" type="submit" id="savePractitionerBtn">Save</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="view" id="view-practitioner-roles">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2>Practitioner Roles Directory</h2>
+              <p id="practitionerRolesSubtitle">Assign practitioners to healthcare facilities</p>
+            </div>
+            <div class="form-actions" style="margin:0;">
+              <button class="btn btn-teal" type="button" id="btnRefreshRoles">Refresh from FHIR</button>
+              <button class="btn btn-primary" type="button" id="btnOpenPractitionerRoleModal">+ Add Practitioner Role</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-toolbar">
+              <form id="roleSearchForm" class="search-bar" autocomplete="off">
+                <input
+                  id="roleSearch"
+                  type="search"
+                  name="q"
+                  placeholder="Search practitioner, organization, role, FHIR ID…"
+                  aria-label="Search practitioner roles"
+                />
+                <button class="btn btn-secondary" type="submit">Search</button>
+                <button class="btn btn-secondary" type="button" id="roleSearchClear">Clear</button>
+              </form>
+              <div class="table-meta" id="practitionerRolesMeta">-</div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>FHIR ID</th>
+                    <th>Practitioner</th>
+                    <th>Organization</th>
+                    <th>Role / Specialty</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="practitionerRolesBody">
+                  <tr><td colspan="6" class="placeholder">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="pager" id="practitionerRolesPager">
+              <button class="btn btn-secondary" type="button" id="practitionerRolesPrev" disabled>Previous</button>
+              <span id="practitionerRolesPageLabel">Page 1 of 1</span>
+              <button class="btn btn-secondary" type="button" id="practitionerRolesNext" disabled>Next</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-practitioner-role-form" hidden>
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2 id="practitionerRoleFormTitle">Add Practitioner Role</h2>
+              <p id="practitionerRoleFormSubtitle">Link a practitioner to a facility with a clinical specialty role</p>
+            </div>
+            <button class="btn btn-secondary" type="button" data-view="practitioner-roles">Back to list</button>
+          </div>
+
+          <form class="card" id="practitionerRoleForm" novalidate>
+            <input type="hidden" name="editId" id="practitionerRoleEditId" value="" />
+            <input type="hidden" name="editFhirId" id="practitionerRoleEditFhirId" value="" />
+            <input type="hidden" name="prcId" id="practitionerRolePrcId" value="" />
+            <input type="hidden" name="practitionerName" id="practitionerRolePractitionerName" value="" />
+            <input type="hidden" name="organizationName" id="practitionerRoleOrganizationName" value="" />
+
+            <div class="alert" id="practitionerRoleFormAlert" style="margin-bottom: 1rem;">
+              Assign an existing FHIR practitioner to a facility. Role codes must come from the DOH Practitioner Role ValueSet (required by the FHIR server).
+            </div>
+
+            <div class="section-title">Assignment</div>
+            <div class="form-grid">
+              <label class="full">Practitioner *
+                <select name="practitionerFhirId" id="rolePractitionerSelectLegacy" required data-placeholder="-- Select Practitioner --">
+                  <option value="">-- Select Practitioner --</option>
+                </select>
+              </label>
+              <label class="full">Organization / Facility *
+                <select name="organizationFhirId" id="roleOrganizationSelectLegacy" required data-placeholder="-- Select Organization --">
+                  <option value="">-- Select Organization --</option>
+                </select>
+              </label>
+              <label class="full">Role / Specialty *
+                <select
+                  name="roleSpecialty"
+                  id="roleSpecialtySelectLegacy"
+                  class="role-specialty-select"
+                  required
+                  data-placeholder="Pick a DOH role, or type to filter..."
+                >
+                  <option value=""></option>
+                </select>
+              </label>
+              <label>Status
+                <select name="active" id="roleActiveSelect">
+                  <option value="true" selected>Active</option>
+                  <option value="false">Inactive</option>
+                </select>
+              </label>
+            </div>
+
+            <input type="hidden" name="roleCode" id="roleCodeInput" value="158965000" />
+            <input type="hidden" name="roleDisplay" id="roleDisplayInput" value="Doctor" />
+            <input type="hidden" name="roleSystem" id="roleSystemInput" value="http://snomed.info/sct" />
+
+            <div class="form-actions">
+              <button class="btn btn-secondary" type="button" data-view="practitioner-roles">Cancel</button>
+              <button class="btn btn-primary" type="submit" id="savePractitionerRoleBtn">Save Role Assignment</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="view" id="view-sync">
+          <div class="page-head-row">
+            <div class="page-head">
+              <h2>Sync Monitor</h2>
+              <p>FHIR connectivity and activity. Persistent local DB sync is temporarily disabled.</p>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom: 1rem;">
+            <h3>Sync Actions</h3>
+            <p class="muted" style="margin-top:0;">
+              Local SQLite pull/push is commented out for now. Lists load live from FHIR.
+              Set <code>USE_PERSISTENT_LOCAL_DB=true</code> in <code>.env</code> to restore.
+            </p>
+            <!--
+            <div class="form-actions" style="justify-content:flex-start;">
+              <button class="btn btn-primary" type="button" id="btnPullFhir">Pull FHIR → Local DB</button>
+              <button class="btn btn-teal" type="button" id="btnPushLocal">Push Pending Local → FHIR</button>
+              <label style="flex-direction:row; align-items:center; gap:0.45rem; font-weight:600;">
+                <input type="checkbox" id="pullTeamOnly" checked />
+                Team prefix only (<span id="teamPrefixLabel">TEAM07</span>)
+              </label>
+            </div>
+            -->
+            <p class="muted" id="syncActionResult" style="margin-bottom:0;">Local DB sync disabled</p>
+          </div>
+          <div class="card" id="syncMonitorCard">Loading…</div>
+        </section>
+        <section class="view" id="view-help">
+          <div class="page-head"><h2>Help &amp; Guide</h2></div>
+          <div class="card">
+            <p><strong>Patient save flow:</strong> FHIR create/update is preferred while persistent local DB is disabled.</p>
+            <p><strong>Do not</strong> change FHIR/terminology server URLs or delete seeded demo resources.</p>
+            <p>FHIR base: <code>https://cdr.pheref.fhirlab.net/fhir</code></p>
+          </div>
+        </section>
+    </main>
+  </div>
+
+  <div class="modal" id="practitionerQuickModal" hidden>
+    <div class="modal-backdrop" data-close-modal="practitionerQuick"></div>
+    <div class="modal-panel entity-quick-modal" role="dialog" aria-modal="true" aria-labelledby="practitionerQuickTitle">
+      <div class="modal-head entity-quick-head">
+        <div class="entity-quick-title-row">
+          <span class="entity-quick-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M4.5 20.2c1.7-3.1 4.3-4.7 7.5-4.7s5.8 1.6 7.5 4.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <h2 id="practitionerQuickTitle">Add New Practitioner</h2>
+        </div>
+        <button class="modal-close" type="button" data-close-modal="practitionerQuick" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/></svg>
+        </button>
+      </div>
+      <form class="modal-body entity-quick-body" id="practitionerQuickForm" autocomplete="off" novalidate>
+        <input type="hidden" name="editId" id="practitionerQuickEditId" value="" />
+        <input type="hidden" name="editFhirId" id="practitionerQuickEditFhirId" value="" />
+        <div class="entity-quick-grid">
+          <label class="full">
+            <span>Practitioner Full Name <em>*</em></span>
+            <input name="fullName" required placeholder="e.g. Dr. Jose Rizal" />
+          </label>
+          <label class="full">
+            <span>Gender <em>*</em></span>
+            <select name="gender" required>
+              <option value="male" selected>Male</option>
+              <option value="female">Female</option>
+              <option value="other">Other</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </label>
+          <label class="full">
+            <span>PRC License Number <em>*</em></span>
+            <input name="prcId" required placeholder="e.g. PRC-123456" />
+          </label>
+        </div>
+      </form>
+      <div class="modal-footer entity-quick-footer">
+        <button class="btn btn-secondary" type="button" data-close-modal="practitionerQuick">Cancel</button>
+        <button class="btn btn-primary btn-entity-save" type="submit" form="practitionerQuickForm" id="savePractitionerQuickBtn">
+          Save Practitioner
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="practitionerRoleQuickModal" hidden>
+    <div class="modal-backdrop" data-close-modal="practitionerRoleQuick"></div>
+    <div class="modal-panel entity-quick-modal" role="dialog" aria-modal="true" aria-labelledby="practitionerRoleQuickTitle">
+      <div class="modal-head entity-quick-head">
+        <div class="entity-quick-title-row">
+          <span class="entity-quick-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M4.5 20.2c1.7-3.1 4.3-4.7 7.5-4.7s5.8 1.6 7.5 4.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="M17.2 8.2h3.6M19 6.4v3.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <h2 id="practitionerRoleQuickTitle">Add Practitioner Role Assignment</h2>
+        </div>
+        <button class="modal-close" type="button" data-close-modal="practitionerRoleQuick" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/></svg>
+        </button>
+      </div>
+      <form class="modal-body entity-quick-body" id="practitionerRoleQuickForm" autocomplete="off" novalidate>
+        <input type="hidden" name="editId" id="practitionerRoleQuickEditId" value="" />
+        <input type="hidden" name="editFhirId" id="practitionerRoleQuickEditFhirId" value="" />
+        <input type="hidden" name="prcId" id="practitionerRoleQuickPrcId" value="" />
+        <input type="hidden" name="practitionerName" id="practitionerRoleQuickPractitionerName" value="" />
+        <input type="hidden" name="organizationName" id="practitionerRoleQuickOrganizationName" value="" />
+        <input type="hidden" name="roleCode" id="practitionerRoleQuickRoleCode" value="158965000" />
+        <input type="hidden" name="roleDisplay" id="practitionerRoleQuickRoleDisplay" value="Doctor" />
+        <input type="hidden" name="roleSystem" id="practitionerRoleQuickRoleSystem" value="http://snomed.info/sct" />
+        <div class="entity-quick-grid">
+          <label class="full">
+            <span>Practitioner <em>*</em></span>
+            <select name="practitionerFhirId" id="rolePractitionerSelect" required data-placeholder="-- Select Practitioner --">
+              <option value="">-- Select Practitioner --</option>
+            </select>
+          </label>
+          <label class="full">
+            <span>Organization / Facility <em>*</em></span>
+            <select name="organizationFhirId" id="roleOrganizationSelect" required data-placeholder="-- Select Organization --">
+              <option value="">-- Select Organization --</option>
+            </select>
+          </label>
+          <label class="full">
+            <span>Role / Specialty <em>*</em></span>
+            <select
+              name="roleSpecialty"
+              id="roleSpecialtySelect"
+              class="role-specialty-select"
+              required
+              data-placeholder="Pick a DOH role, or type to filter..."
+            >
+              <option value=""></option>
+            </select>
+          </label>
+        </div>
+        <div class="active-assignment-row">
+          <div>
+            <strong>Active Assignment</strong>
+            <p>Allow this practitioner to actively accept clinical tasks and referrals.</p>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" name="activeToggle" id="roleQuickActiveToggle" checked />
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+          <input type="hidden" name="active" id="roleQuickActiveValue" value="true" />
+        </div>
+      </form>
+      <div class="modal-footer entity-quick-footer">
+        <button class="btn btn-secondary" type="button" data-close-modal="practitionerRoleQuick">Cancel</button>
+        <button class="btn btn-primary btn-entity-save" type="submit" form="practitionerRoleQuickForm" id="savePractitionerRoleQuickBtn">
+          Save Role Assignment
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="recordViewModal" hidden>
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="recordViewTitle">
+      <div class="modal-head">
+        <div class="modal-identity">
+          <p class="modal-kicker" id="recordViewKicker">Record</p>
+          <h2 id="recordViewTitle">Details</h2>
+          <p class="modal-subtitle" id="recordViewSubtitle">-</p>
+          <div class="modal-meta" id="recordViewChips"></div>
+        </div>
+        <button class="modal-close" type="button" data-close-modal aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" id="recordViewBody"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="patientPickerModal" hidden>
+    <div class="modal-backdrop" data-close-modal="patientPicker"></div>
+    <div class="modal-panel patient-picker-panel" role="dialog" aria-modal="true" aria-labelledby="patientPickerTitle">
+      <div class="modal-head patient-picker-head">
+        <h2 id="patientPickerTitle">Select Patient</h2>
+        <button class="modal-close" type="button" data-close-modal="patientPicker" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <form id="patientPickerSearchForm" class="patient-picker-toolbar" autocomplete="off">
+          <input
+            id="patientPickerSearch"
+            type="search"
+            name="q"
+            placeholder="Search name, PhilSys, PhilHealth, FHIR ID..."
+            aria-label="Search patients"
+          />
+          <button class="btn btn-primary" type="submit">Search</button>
+        </form>
+        <div class="table-wrap patient-picker-table-wrap">
+          <table class="data-table patient-picker-table">
+            <thead>
+              <tr>
+                <th class="col-check"></th>
+                <th>Name</th>
+                <th>Birth Date</th>
+                <th>PhilSys</th>
+                <th>PhilHealth ID</th>
+                <th>FHIR ID</th>
+              </tr>
+            </thead>
+            <tbody id="patientPickerBody">
+              <tr><td colspan="6" class="placeholder">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" type="button" data-close-modal="patientPicker">Cancel</button>
+        <button class="btn btn-primary" type="button" id="patientPickerSelectBtn" disabled>Select</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="referralSyncModal" hidden>
+    <div class="modal-backdrop" data-close-modal="referralSync"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="referralSyncTitle">
+      <div class="modal-head">
+        <div class="modal-identity">
+          <p class="modal-kicker">Sent referral</p>
+          <h2 id="referralSyncTitle">FHIR sync details</h2>
+          <p class="modal-subtitle" id="referralSyncSubtitle">-</p>
+          <div class="modal-meta" id="referralSyncChips"></div>
+        </div>
+        <button class="modal-close" type="button" data-close-modal="referralSync" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" id="referralSyncBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" type="button" data-close-modal="referralSync">Cancel</button>
+        <button class="btn" type="button" id="referralSyncRetryBtn" hidden>Retry</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="transferReferralModal" hidden>
+    <div class="modal-backdrop" data-close-modal="transferReferral"></div>
+    <div class="modal-panel transfer-modal-panel" role="dialog" aria-modal="true" aria-labelledby="transferReferralTitle">
+      <div class="modal-head transfer-modal-head">
+        <div class="transfer-modal-title-row">
+          <span class="transfer-modal-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M7 7h11l-2.2-2.2 1.4-1.4L22.2 7l-5 5-1.4-1.4L18 8.4H7V7Z" fill="currentColor"/>
+              <path d="M17 17H6l2.2 2.2-1.4 1.4L1.8 17l5-5 1.4 1.4L6 15.6h11V17Z" fill="currentColor"/>
+            </svg>
+          </span>
+          <h2 id="transferReferralTitle">Transfer &amp; Redirect Referral</h2>
+        </div>
+        <button class="modal-close" type="button" data-close-modal="transferReferral" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/></svg>
+        </button>
+      </div>
+      <form class="modal-body transfer-modal-body" id="transferReferralForm" autocomplete="off">
+        <input type="hidden" name="taskFhirId" id="transferTaskFhirId" value="" />
+        <input type="hidden" name="currentReceivingOrgFhirId" id="transferCurrentOrgFhirId" value="" />
+
+        <div class="transfer-banner" role="note">
+          <span class="transfer-banner-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
+              <path d="M12 10.5V16M12 7.75v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <div>
+            <strong>Re-route Referral Destination</strong>
+            <p>Transfer this patient referral to another facility (e.g. for specialized care, ICU availability, or facility capacity).</p>
+          </div>
+        </div>
+
+        <p class="transfer-context" id="transferReferralContext">-</p>
+
+        <div class="form-grid transfer-form-grid">
+          <label class="full">
+            <span>New Target Receiving Facility / Hospital <em>*</em></span>
+            <select name="receivingOrgFhirId" id="transferReceivingOrgId" required>
+              <option value="">Select receiving facility...</option>
+            </select>
+          </label>
+          <label class="full">
+            <span>New Receiving Doctor / Practitioner <em>*</em></span>
+            <select name="receivingPracRoleFhirId" id="transferReceivingPracId" required>
+              <option value="">-- Select Receiving Doctor / Practitioner --</option>
+            </select>
+          </label>
+          <label class="full">
+            <span>Transfer Reason &amp; Clinical Remarks <em>*</em></span>
+            <textarea
+              name="reason"
+              id="transferReason"
+              rows="4"
+              required
+              placeholder="Enter clinical reason for transferring patient (e.g., Required tertiary ICU facility &amp; continuous telemetry monitoring)..."
+            ></textarea>
+          </label>
+        </div>
+      </form>
+      <div class="modal-footer transfer-modal-footer">
+        <button class="btn btn-secondary" type="button" data-close-modal="transferReferral">Cancel</button>
+        <button class="btn btn-transfer" type="submit" form="transferReferralForm" id="transferReferralSubmitBtn">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h14l-4.2-4.2 1.4-1.4L22 12l-6.8 5.6-1.4-1.4L18 13H4v-1Z" fill="currentColor"/></svg>
+          Confirm &amp; Transfer Referral
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="fhirBundlePreviewModal" hidden>
+    <div class="modal-backdrop" data-close-modal="fhirBundlePreview"></div>
+    <div class="modal-panel fhir-preview-panel" role="dialog" aria-modal="true" aria-labelledby="fhirBundlePreviewTitle">
+      <div class="modal-head">
+        <div class="modal-identity">
+          <p class="modal-kicker">New referral</p>
+          <h2 id="fhirBundlePreviewTitle">Preview FHIR Bundle</h2>
+          <p class="modal-subtitle" id="fhirBundlePreviewSubtitle">Review the transaction Bundle before submit</p>
+          <div class="modal-meta" id="fhirBundlePreviewChips"></div>
+        </div>
+        <button class="modal-close" type="button" data-close-modal="fhirBundlePreview" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/></svg>
+        </button>
+      </div>
+      <div class="modal-body fhir-preview-body">
+        <pre class="fhir-json-viewer" id="fhirBundlePreviewCode" tabindex="0"></pre>
+      </div>
+      <div class="modal-footer fhir-preview-footer">
+        <button class="btn btn-secondary" type="button" data-close-modal="fhirBundlePreview">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 6.4 12 12l5.6-5.6 1.4 1.4L13.4 13.4l5.6 5.6-1.4 1.4L12 14.8l-5.6 5.6-1.4-1.4 5.6-5.6L5 7.8l1.4-1.4Z"/></svg>
+          Cancel
+        </button>
+        <div class="fhir-preview-footer-right">
+          <button class="btn btn-secondary is-active" type="button" id="fhirBundlePreviewRefreshBtn">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8.5 7.5h7v1.5h-7V7.5Zm0 4h7v1.5h-7V11.5Zm0 4h5v1.5h-5V15.5Z"/>
+              <path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm1 2v12h12V6H6Z"/>
+            </svg>
+            Preview FHIR Bundle
+          </button>
+          <button class="btn btn-primary" type="button" id="fhirBundlePreviewSubmitBtn">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3.2 11.2 20.1 3.5l-3.2 16.8-5.2-4.7-3.3 3.2.7-4.9 8.4-7.5-10.3 4.8Z"/>
+            </svg>
+            Submit Referral
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal progress-modal" id="progressModal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="progress-panel" role="dialog" aria-modal="true" aria-labelledby="progressTitle" aria-busy="true">
+      <div class="progress-spinner" aria-hidden="true"></div>
+      <h2 id="progressTitle">Saving...</h2>
+      <p id="progressMessage">Please wait while we save your changes.</p>
+      <ol class="progress-steps" id="progressSteps" hidden></ol>
+      <div class="progress-bar" aria-hidden="true">
+        <div class="progress-bar-fill" id="progressBarFill"></div>
+      </div>
+      <div class="progress-actions" id="progressActions" hidden>
+        <button class="btn btn-secondary" type="button" id="progressCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toastr-container" id="toastrContainer" aria-live="polite" aria-relevant="additions"></div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+  <script src="/js/psgc-select.js"></script>
+  <script src="/js/app.js?v=timeline-auto-1"></script>
+</body>
+</html>
